@@ -48,6 +48,7 @@ export class LyricsSyncerComponent implements OnInit, OnChanges {
   @Output() onPlayPause = new EventEmitter<void>();
   @Output() onSyncComplete = new EventEmitter<{ chordsheet: string, timestamps: number[] }>();
   @Output() rawLyricsChange = new EventEmitter<string>();
+  @Output() onAutoSyncComplete = new EventEmitter<string>();
 
   @ViewChild('timelineEndRef') timelineEndEl!: ElementRef<HTMLDivElement>;
 
@@ -144,6 +145,28 @@ export class LyricsSyncerComponent implements OnInit, OnChanges {
   public handleLyricsTextChange(value: string) {
     this.rawLyrics = value;
     this.rawLyricsChange.emit(value);
+  }
+
+  public async handleAutoSyncAI() {
+    if (!this.audioPath || !this.rawLyrics.trim()) {
+      this.error = 'Please load a song and paste some lyrics first.';
+      return;
+    }
+    this.isGenerating = true;
+    this.error = '';
+    try {
+      const result = await this.apiService.alignLyrics(this.audioPath, this.rawLyrics);
+      if (result.status === 'success') {
+        this.rawLyrics = result.aligned_lyrics;
+        this.onAutoSyncComplete.emit(result.aligned_lyrics);
+      } else {
+        this.error = result.error || 'Failed to align lyrics.';
+      }
+    } catch (err: any) {
+      this.error = 'Error calling AI align: ' + err.message;
+    } finally {
+      this.isGenerating = false;
+    }
   }
 
   public async handleGenerateSheet() {

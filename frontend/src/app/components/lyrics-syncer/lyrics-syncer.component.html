@@ -29,7 +29,10 @@
         'text-align': hasHebrew(rawLyrics) ? 'right' : 'left'
       }"
     ></textarea>
-    <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+    <div style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+      <button class="btn btn-secondary" (click)="handleAutoSyncAI()" [disabled]="!audioPath || isGenerating" style="display: flex; align-items: center; gap: 6px;">
+        <svg lucideSparkles style="width: 16px; height: 16px;"></svg> Auto-Sync with AI
+      </button>
       <button class="btn btn-primary" (click)="startSyncMode()" [disabled]="!audioPath">
         Lock & Start Syncing
       </button>

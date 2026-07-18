@@ -36,17 +36,19 @@ class LyricExtractor:
         seconds_rem = seconds % 60
         return f"[{minutes:02d}:{seconds_rem:05.2f}]"
 
-    def extract_lyrics(self, filepath, language=None):
+    def extract_lyrics(self, filepath, language=None, initial_prompt=None):
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Audio file not found: {filepath}")
 
         # If language is None, we need to detect it.
         # But we don't know the language yet, so we load the default model (large-v3)
-        model = self._get_model(language or "en")
+        model = self._get_model(language)
         
         kwargs = {}
         if language:
             kwargs['language'] = language
+        if initial_prompt:
+            kwargs['initial_prompt'] = initial_prompt
             
         print(f"Transcribing '{os.path.basename(filepath)}' (this may take time on CPU)...")
         segments_gen, info = model.transcribe(filepath, word_timestamps=True, **kwargs)
@@ -56,7 +58,12 @@ class LyricExtractor:
         if language is None and detected_lang == "he":
             print(f"Detected Hebrew audio. Switching to optimized Ivrit.ai model...")
             model = self._get_model("he")
-            segments_gen, info = model.transcribe(filepath, language="he", word_timestamps=True)
+            
+            kwargs_he = {"language": "he", "word_timestamps": True}
+            if initial_prompt:
+                kwargs_he["initial_prompt"] = initial_prompt
+                
+            segments_gen, info = model.transcribe(filepath, **kwargs_he)
             
         # Extract segments
         segments = []
@@ -90,6 +97,18 @@ class LyricExtractor:
             'segments': segments
         }
 
+    def _normalize_for_alignment(self, word):
+        import re
+        # Remove punctuation
+        word = re.sub(r'[,.?!":\(\)\[\]\{\}\-\_]', '', word).lower().strip()
+        # Remove Hebrew Niqqud
+        word = re.sub(r'[\u0591-\u05C7]', '', word)
+        # Normalize final Hebrew letters
+        word = word.replace('ם', 'מ').replace('ן', 'נ').replace('ץ', 'צ').replace('ף', 'פ').replace('ך', 'כ')
+        # Remove common Hebrew vowels to allow fuzzy matching (ktiv haser/male)
+        word = word.replace('ו', '').replace('י', '')
+        return word
+
     def align_lyrics(self, raw_segments, official_lyrics_text):
         """
         Aligns clean official lyrics text with raw Whisper segments to assign timestamps.
@@ -110,7 +129,7 @@ class LyricExtractor:
             if 'words' in segment and segment['words']:
                 for w in segment['words']:
                     raw_words.append({
-                        'word': w['word'].strip(',.?!":()[]{}').lower(),
+                        'word': self._normalize_for_alignment(w['word']),
                         'time': w['start'],
                         'timestamp': self.format_timestamp(w['start']),
                         'end_time': w['end']
@@ -124,7 +143,7 @@ class LyricExtractor:
                 for pos, w in enumerate(words):
                     interp_time = seg_start + (pos / n) * seg_dur
                     raw_words.append({
-                        'word': w.strip(',.?!":()[]{}').lower(),
+                        'word': self._normalize_for_alignment(w),
                         'time': interp_time,
                         'timestamp': self.format_timestamp(interp_time),
                         'end_time': interp_time + (seg_dur / n)
@@ -137,27 +156,78 @@ class LyricExtractor:
             if line.startswith('[') and line.endswith(']'):
                 continue
             for w in line.split():
-                official_words.append(w.strip(',.?!":()[]{}').lower())
+                official_words.append(self._normalize_for_alignment(w))
                 word_to_line_idx.append(line_idx)
 
-        # 3. Use SequenceMatcher to find matching word subsequences
-        matcher = difflib.SequenceMatcher(
-            None,
-            [rw['word'] for rw in raw_words],
-            official_words
-        )
-
-        # 4. Assign the interpolated timestamp of the first matched word in each line
+        # 3. Use Dynamic Programming (Needleman-Wunsch) to find robust global alignment
+        n = len(raw_words)
+        m = len(official_words)
+        
+        dp = [[0.0] * (m + 1) for _ in range(n + 1)]
+        ptr = [[0] * (m + 1) for _ in range(n + 1)]
+        
+        for i in range(1, n + 1):
+            dp[i][0] = i * 1.0
+            ptr[i][0] = 1 # up
+        for j in range(1, m + 1):
+            dp[0][j] = j * 1.0
+            ptr[0][j] = 2 # left
+            
+        import difflib
+        for i in range(1, n + 1):
+            rw = raw_words[i-1]['word']
+            for j in range(1, m + 1):
+                ow = official_words[j-1]
+                
+                if rw == ow:
+                    cost = 0.0
+                elif len(rw) > 1 and len(ow) > 1 and difflib.SequenceMatcher(None, rw, ow).ratio() >= 0.75:
+                    cost = 0.3
+                else:
+                    cost = 1.9
+                    
+                cd = dp[i-1][j-1] + cost
+                cu = dp[i-1][j] + 1.0
+                cl = dp[i][j-1] + 1.0
+                
+                if cd <= cu and cd <= cl:
+                    dp[i][j] = cd
+                    ptr[i][j] = 0
+                elif cu <= cl:
+                    dp[i][j] = cu
+                    ptr[i][j] = 1
+                else:
+                    dp[i][j] = cl
+                    ptr[i][j] = 2
+                    
+        # 4. Backtrack to find matches and assign timestamps
         line_timestamps = [None] * len(official_lines)
-        for block in matcher.get_matching_blocks():
-            raw_start, official_start, length = block
-            for i in range(length):
-                line_idx = word_to_line_idx[official_start + i]
-                if line_timestamps[line_idx] is None:
-                    line_timestamps[line_idx] = raw_words[raw_start + i]['timestamp']
+        
+        i, j = n, m
+        while i > 0 and j > 0:
+            p = ptr[i][j]
+            if p == 0:
+                rw = raw_words[i-1]['word']
+                ow = official_words[j-1]
+                is_match = (rw == ow) or (len(rw) > 1 and len(ow) > 1 and difflib.SequenceMatcher(None, rw, ow).ratio() >= 0.75)
+                
+                if is_match:
+                    line_idx = word_to_line_idx[j-1]
+                    # We iterate backwards, so if it's already set, we might overwrite it with an EARLIER word's timestamp.
+                    # This is exactly what we want: the timestamp of the FIRST matched word in the line.
+                    line_timestamps[line_idx] = raw_words[i-1]['timestamp']
+                i -= 1
+                j -= 1
+            elif p == 1:
+                i -= 1
+            else:
+                j -= 1
 
         # 5. Forward-fill any lines that didn't get a direct match
         last_known = "[00:00.00]"
+        if raw_words:
+            last_known = raw_words[0]['timestamp']
+            
         for idx in range(len(official_lines)):
             if official_lines[idx].startswith('[') and official_lines[idx].endswith(']'):
                 continue
@@ -587,7 +657,11 @@ class LyricExtractor:
         
         # 1. Run Whisper transcription
         print(f"Transcribing audio '{audio_path}' with Whisper...")
-        res = self.extract_lyrics(audio_path, language=language)
+        prompt = None
+        if manual_lyrics:
+            prompt = manual_lyrics[:1000] # Whisper prompt is typically limited, ~1000 chars is safe
+            
+        res = self.extract_lyrics(audio_path, language=language, initial_prompt=prompt)
         segments = res['segments']
         detected_lang = res['language']
         
