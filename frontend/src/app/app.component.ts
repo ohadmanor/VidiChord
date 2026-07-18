@@ -346,9 +346,29 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
+  public isAligning = false;
+
   public async saveEditedLyrics() {
     if (!this.lyricsData || !this.audioPath) return;
     try {
+      const hasTimestamps = /\[\d{1,2}:\d{2}\.\d{1,3}\]/.test(this.lyricsData);
+      
+      if (!hasTimestamps) {
+        this.success = 'Aligning lyrics with AI...';
+        this.isAligning = true;
+        const response = await this.apiService.alignLyrics(this.audioPath, this.lyricsData);
+        if (response.status === 'success') {
+          this.lyricsData = response.aligned_lyrics;
+          this.success = 'Lyrics aligned successfully! Resyncing...';
+          setTimeout(() => this.success = '', 3000);
+          this.buildSyncedSheet();
+        } else {
+          this.error = response.error || 'Failed to align lyrics.';
+        }
+        this.isAligning = false;
+        return;
+      }
+
       this.success = 'Saving lyrics...';
       const response = await this.apiService.saveLyrics(this.audioPath, this.lyricsData);
       if (response.status === 'success') {
@@ -361,6 +381,7 @@ export class AppComponent implements OnInit, OnDestroy {
       }
     } catch (err: any) {
       this.error = `Error saving lyrics: ${err.message}`;
+      this.isAligning = false;
     }
   }
 

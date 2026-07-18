@@ -219,9 +219,13 @@
             <svg lucideFileText style="width: 18px; height: 18px; color: var(--primary);"></svg>
             <h2 style="font-size: 1rem; font-weight: 600; margin: 0;">Lyrics</h2>
           </div>
-          <button *ngIf="lyricsData" class="btn btn-primary" (click)="saveEditedLyrics()" style="padding: 4px 10px; font-size: 0.75rem; border-radius: 4px;">
-            <svg lucideSave style="width: 12px; height: 12px; margin-right: 4px;"></svg> Sync
-          </button>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button *ngIf="lyricsData" class="btn btn-primary" (click)="saveEditedLyrics()" [disabled]="isAligning" style="padding: 4px 10px; font-size: 0.75rem; border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+              <svg *ngIf="isAligning" lucideSparkles style="width: 12px; height: 12px;"></svg>
+              <svg *ngIf="!isAligning" lucideSave style="width: 12px; height: 12px; margin-right: 4px;"></svg> 
+              {{ isAligning ? 'Aligning...' : 'Sync' }}
+            </button>
+          </div>
         </div>
         
         <textarea *ngIf="lyricsData" [(ngModel)]="lyricsData" [dir]="isHebrew ? 'rtl' : 'ltr'" [style.text-align]="isHebrew ? 'right' : 'left'"

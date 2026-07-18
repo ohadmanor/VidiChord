@@ -127,6 +127,16 @@ export class ApiService {
     return response.json();
   }
 
+  async alignLyrics(wavPath: string, lyrics: string): Promise<any> {
+    const url = `${this.baseUrl}/api/align_lyrics`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wav_path: wavPath, lyrics })
+    });
+    return response.json();
+  }
+
   async saveChords(wavPath: string, beats: any[]): Promise<any> {
     const url = `${this.baseUrl}/api/save_chords`;
     const response = await fetch(url, {

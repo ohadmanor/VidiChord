@@ -1,5 +1,11 @@
 import os
 import sys
+
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding.lower() != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 import json
 import urllib.parse
 import threading
@@ -379,6 +385,57 @@ class LocalHTTPServerHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
                 
+        elif path == '/api/align_lyrics':
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            try:
+                data = json.loads(body)
+                wav_path = data.get('wav_path')
+                lyrics_text = data.get('lyrics')
+                
+                if not wav_path or not lyrics_text:
+                    self.send_json({"error": "Missing wav_path or lyrics"}, 400)
+                    return
+                
+                config = config_manager.load_config()
+                lyrics_dir = config.get("lyrics_dir", os.path.join(BASE_DIR, "VidiChord_Files", "Lyrics"))
+                
+                base_name = os.path.splitext(os.path.basename(wav_path))[0]
+                import re
+                base_name = re.sub(r' \(\d+\)$', '', base_name)
+                
+                json_filename = f"{base_name}_lyrics.json"
+                json_filepath = os.path.join(lyrics_dir, json_filename)
+                
+                if not os.path.exists(json_filepath):
+                    self.send_json({"error": "No whisper segments found to align with."}, 400)
+                    return
+                
+                with open(json_filepath, 'r', encoding='utf-8') as f:
+                    segments_data = json.load(f)
+                segments = segments_data.get("segments", [])
+                
+                from text_transcript.lyric_extractor.lyric_extractor.core import LyricExtractor
+                extractor = LyricExtractor()
+                official_lyrics = extractor.inject_structure_tags(lyrics_text)
+                aligned_text = extractor.align_lyrics(segments, official_lyrics)
+                
+                # Also save the newly aligned text
+                lyrics_filename = f"{base_name}_lyrics.txt"
+                lyrics_filepath = os.path.join(lyrics_dir, lyrics_filename)
+                with open(lyrics_filepath, 'w', encoding='utf-8') as f:
+                    f.write(aligned_text)
+                
+                with status_lock:
+                    if conversion_status.get("output_filename") == wav_path:
+                        conversion_status["lyrics"] = aligned_text
+                
+                self.send_json({"status": "success", "aligned_lyrics": aligned_text})
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.send_json({"error": str(e)}, 500)
+
         elif path == '/api/save_chords':
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode('utf-8')
