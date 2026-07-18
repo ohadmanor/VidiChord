@@ -1,0 +1,4 @@
+openai-whisper
+soundfile
+numpy
+yt-dlp

@@ -1,0 +1,7 @@
+Cython
+wheel
+numpy
+scipy
+librosa
+madmom
+soundfile
