@@ -1,0 +1,15 @@
+{
+  "emission_weights": {
+    "essentia_match": 0.85,
+    "librosa_match": 0.40,
+    "madmom_match": 0.45,
+    "none_state_bias": 0.80
+  },
+  "transition_probabilities": {
+    "self_transition": 0.75,
+    "same_root_diff_quality": 0.05,
+    "circle_of_fifths_dist_1": 0.04,
+    "circle_of_fifths_dist_2": 0.01,
+    "unrelated_chord": 0.001
+  }
+}

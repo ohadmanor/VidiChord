@@ -1,0 +1,5 @@
+audios/
+lyric/
+lyric_extractor/.venv/
+__pycache__/
+*.pyc

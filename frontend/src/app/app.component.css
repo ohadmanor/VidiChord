@@ -1,0 +1,124 @@
+/* Synced Chord Sheet Styles */
+.synced-sheet-container {
+  font-family: var(--font-mono);
+}
+
+.synced-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Synced Block (one lyric line or one instrumental section) */
+.synced-block {
+  padding: 2px 0;
+}
+
+.synced-block.lyric-block {
+  margin-bottom: 4px;
+}
+
+.synced-block.instrumental-block {
+  margin: 20px 0;
+}
+
+/* Instrumental text: // C G / F / Am // */
+.instrumental-text {
+  color: var(--chord-color);
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+  padding: 8px 0;
+}
+
+/* Active Line Highlight */
+.synced-block.active-line {
+  background: var(--surface-1);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0 -12px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.3s ease;
+}
+
+/* Section Break (2 lines of space) */
+.section-break {
+  height: 3em; /* 2 lines of space */
+}
+
+/* Lyric Wrapper to constrain width to text or allow stretching */
+.lyric-wrapper {
+  display: inline-flex;
+  flex-direction: column;
+  position: relative;
+  min-width: fit-content;
+}
+
+/* Chords Row — Bars Grid */
+.chords-row-bars {
+  display: flex;
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.chords-row-text {
+  color: var(--chord-color);
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  outline: none;
+  border-bottom: 1px dashed transparent;
+  transition: border-bottom 0.2s;
+  min-height: 1.5rem;
+}
+
+.chords-row-text:focus,
+.chords-row-text:hover {
+  border-bottom: 1px dashed var(--primary);
+  background-color: var(--surface-1);
+}
+
+/* Lyrics Row */
+.lyrics-row {
+  color: var(--text-main);
+  font-weight: 500;
+  font-size: 1.05rem;
+  line-height: 1.5;
+  width: 100%;
+  border-bottom: 1px dashed transparent;
+  transition: border-bottom 0.2s;
+  outline: none;
+}
+
+.lyrics-row[contenteditable="true"]:focus,
+.lyrics-row[contenteditable="true"]:hover {
+  border-bottom: 1px dashed var(--primary);
+  background-color: var(--surface-1);
+}
+
+/* RTL Mode (Hebrew) */
+.synced-sheet-container.rtl-mode .synced-content {
+  text-align: right;
+}
+
+.synced-sheet-container.rtl-mode .instrumental-text {
+  text-align: right;
+}
+
+.synced-sheet-container.rtl-mode .lyrics-row {
+  text-align: right;
+}
+
+/* For RTL, flip the chord row order */
+.synced-sheet-container.rtl-mode .chords-row-bars {
+  direction: ltr;
+}
+
+/* Active Bar Highlight in Chord Sheet */
+.bar-card.active-bar {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3), var(--shadow-sm) !important;
+  background: rgba(99, 102, 241, 0.06) !important;
+}

@@ -1,0 +1,464 @@
+<div class="app-container">
+  <!-- Header -->
+  <header class="app-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 12px;">
+    
+    <!-- Left: Logo -->
+    <div class="logo" style="display: flex; align-items: center; gap: 10px;">
+      <img src="VidiChord.png" alt="VidiChord Logo" class="logo-img" style="width: 36px; height: 36px; border-radius: 8px; object-fit: contain;">
+      <div class="logo-text">
+        <h1 style="font-family: var(--font-display); font-size: 1.25rem; font-weight: 800; background: linear-gradient(135deg, var(--chord-color), var(--primary)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">VidiChord <span style="font-size: 0.65rem; padding: 2px 6px; background: var(--primary); -webkit-text-fill-color: var(--on-accent); border-radius: 4px; opacity: 0.8; vertical-align: middle; margin-left: 6px;">v0.0.4</span></h1>
+        <p style="font-size: 0.75rem; color: var(--text-muted);">Chord & Lyrics Alignment Studio</p>
+      </div>
+    </div>
+
+    <!-- Right: Global Audio Player & Settings -->
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 24px; width: 100%; max-width: 650px; justify-content: flex-end;">
+      
+      <!-- YouTube Input (Only shows when no audio loaded) -->
+      <div *ngIf="!audioPath" style="flex: 1; display: flex; align-items: center; gap: 8px;">
+        <input 
+          type="text" 
+          [(ngModel)]="youtubeUrl" 
+          placeholder="Paste YouTube URL here..." 
+          style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); outline: none; font-size: 0.85rem;"
+        />
+        <button class="btn btn-primary" (click)="handleSelectYoutube()" [disabled]="!youtubeUrl.trim() || (extractionStatus !== 'idle' && extractionStatus !== 'failed')" style="padding: 8px 16px; font-size: 0.85rem; white-space: nowrap;">
+          Extract & Align
+        </button>
+      </div>
+
+      <!-- Global Audio Player (Only shows when audio is loaded) -->
+      <div *ngIf="audioPath" class="header-audio-player" style="flex: 1; display: flex; align-items: center; gap: 16px;">
+        <!-- Precision Time Control (Back) -->
+        <button class="play-pause-btn" (click)="audioService.seekRelative(-0.1)" title="Step back 0.1s" style="width: 28px; height: 28px; border-radius: 4px; background: var(--inset-bg); color: var(--text-main); border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;">
+          <span style="font-size: 0.8rem; font-weight: bold;">-0.1</span>
+        </button>
+
+        <!-- Play/Pause Button -->
+        <button class="play-pause-btn" (click)="togglePlayPause()" style="width: 36px; height: 36px; border-radius: 50%; background: var(--primary); color: white; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+          <svg *ngIf="audioService.isPlaying()" lucidePause style="width: 16px; height: 16px; fill: #fff;"></svg>
+          <svg *ngIf="!audioService.isPlaying()" lucidePlay style="width: 16px; height: 16px; fill: #fff; margin-left: 2px;"></svg>
+        </button>
+
+        <!-- Precision Time Control (Forward) -->
+        <button class="play-pause-btn" (click)="audioService.seekRelative(0.1)" title="Step forward 0.1s" style="width: 28px; height: 28px; border-radius: 4px; background: var(--inset-bg); color: var(--text-main); border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;">
+          <span style="font-size: 0.8rem; font-weight: bold;">+0.1</span>
+        </button>
+
+        <!-- Scrubber & Waveform -->
+        <div class="player-middle" style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+          <div style="display: flex; justify-content: flex-end; align-items: center; font-size: 0.75rem; font-weight: 500; color: var(--text-muted);">
+            <div class="time-display" style="font-family: var(--font-mono);">
+              <span>{{ formatTime(audioService.currentTime()) }}</span> / <span>{{ formatTime(audioService.duration()) }}</span>
+            </div>
+          </div>
+          
+          <div 
+            (mousemove)="handlePlayBarMouseMove($event)"
+            (mouseenter)="showHoverTooltip = true"
+            (mouseleave)="showHoverTooltip = false"
+            style="position: relative; width: 100%; height: 24px; display: flex; flex-direction: column; justify-content: center; background: var(--inset-bg); border-radius: 4px; overflow: visible; padding: 0;"
+          >
+            <!-- Waveform Canvas in the background -->
+            <app-waveform
+              [duration]="audioService.duration()"
+              [currentTime]="audioService.currentTime()"
+              style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none;"
+            ></app-waveform>
+            
+            <!-- Progress Scrubber overlay on top -->
+            <input
+              type="range"
+              class="progress-scrubber"
+              min="0"
+              [max]="audioService.duration() || 100"
+              step="0.1"
+              [value]="audioService.currentTime()"
+              (input)="handleSeek(+$any($event.target).value)"
+              style="width: 100%; background: transparent !important; border: none; margin: 0; outline: none; z-index: 2; pointer-events: auto; position: relative;"
+            />
+            
+            <!-- Hover Time Tooltip -->
+            <div 
+              *ngIf="showHoverTooltip && audioService.duration() > 0"
+              [style.left.px]="hoverLeft"
+              style="position: absolute; bottom: 28px; transform: translateX(-50%); background: var(--primary); border: 1px solid var(--primary); color: var(--on-accent); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; pointer-events: none; z-index: 100; white-space: nowrap; box-shadow: var(--shadow-lg);"
+            >
+              {{ hoverTimeText }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Volume -->
+        <div class="player-right" style="display: flex; align-items: center; gap: 8px;">
+          <svg lucideVolume2 style="width: 16px; height: 16px; color: var(--text-muted);"></svg>
+          <input
+            type="range"
+            class="volume-slider"
+            min="0"
+            max="1"
+            step="0.05"
+            [value]="audioService.volume()"
+            (input)="audioService.setVolume(+$any($event.target).value)"
+            style="width: 60px;"
+          />
+        </div>
+      </div>
+      
+      <!-- Settings Button -->
+      <button (click)="showSettingsModal = true" style="background: transparent; border: none; cursor: pointer; color: var(--text-muted); padding: 8px; border-radius: 50%; transition: all 0.2s ease;">
+        <svg lucideSettings style="width: 20px; height: 20px;"></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace Panel -->
+  <main class="main-content" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+    
+    <!-- Error/Success Alerts -->
+    <div *ngIf="error" class="alert-error" style="display: flex; align-items: center; gap: 8px; background: rgba(239, 68, 68, 0.1); color: #ef4444; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 0.85rem; border: 1px solid rgba(239, 68, 68, 0.2);">
+      <svg lucideAlertCircle style="width: 16px; height: 16px;"></svg>
+      <span>{{ error }}</span>
+    </div>
+    <div *ngIf="success" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); color: #047857; padding: 12px 16px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 16px;">
+      <span>{{ success }}</span>
+    </div>
+    <!-- USER CHOICE MODAL (Waiting for lyrics choice) -->
+    <div *ngIf="showUserChoiceModal" class="glass-panel" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 5px;">Lyrics Not Found</h2>
+        <p style="color: var(--text-muted); font-size: 0.875rem;">We couldn't find the lyrics automatically. Please choose an option below:</p>
+      </div>
+
+      <div style="width: 100%; max-width: 600px; display: flex; flex-direction: column; gap: 20px;">
+        <!-- Option 1: AI Transcript -->
+        <div style="background: var(--inset-bg); border: 1px solid var(--border-color); padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 10px;">
+          <h3 style="font-size: 1.1rem; font-weight: 600; color: var(--primary);">Option 1: Full AI Transcription</h3>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">Run the Whisper AI model to extract lyrics from the audio. This will take 5-10 minutes.</p>
+          <div style="display: flex; align-items: center; gap: 10px; margin-top: 5px;">
+            <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">Language:</label>
+            <select [(ngModel)]="selectedLanguage" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--surface-1); color: var(--text-main); font-size: 0.9rem; outline: none; min-width: 150px;">
+              <option value="auto">Auto-Detect</option>
+              <option value="he">Hebrew (Optimized)</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" (click)="submitAiChoice()" style="padding: 10px 20px; align-self: flex-start; margin-top: 5px;">
+            Start AI Transcription
+          </button>
+        </div>
+
+        <!-- Option 2: Manual Paste -->
+        <div style="background: var(--inset-bg); border: 1px solid var(--border-color); padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 10px;">
+          <h3 style="font-size: 1.1rem; font-weight: 600; color: var(--primary);">Option 2: Paste Lyrics Manually</h3>
+          <p style="font-size: 0.85rem; color: var(--text-muted);">Paste the official lyrics here, and we'll align them to the audio.</p>
+          <textarea 
+            [(ngModel)]="manualLyricsInput" 
+            placeholder="Paste lyrics here..."
+            style="width: 100%; height: 150px; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--surface-1); color: var(--text-main); font-family: var(--font-mono); resize: vertical;"
+          ></textarea>
+          <button class="btn btn-primary" (click)="submitManualChoice()" [disabled]="!manualLyricsInput.trim()" style="padding: 10px 20px; align-self: flex-start;">
+            Align Manually Pasted Lyrics
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- INITIAL UPLOAD VIEW (Visible until extraction completes) -->
+    <div *ngIf="extractionStatus !== 'completed' && !showUserChoiceModal" class="glass-panel" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 5px;">Load Song Source</h2>
+        <p style="color: var(--text-muted); font-size: 0.875rem;">Import audio directly from a YouTube video link to begin.</p>
+      </div>
+
+      <!-- Initial State Guide -->
+      <div *ngIf="!audioPath && extractionStatus === 'idle'" style="width: 100%; max-width: 600px; background: var(--inset-bg); border: 1px solid var(--border-color); padding: 30px; border-radius: 12px; box-shadow: var(--shadow-sm); text-align: center;">
+        <div style="display: inline-flex; width: 48px; height: 48px; border-radius: 50%; background: rgba(239, 68, 68, 0.15); align-items: center; justify-content: center; margin-bottom: 16px;">
+          <svg lucidePlay style="width: 24px; height: 24px; fill: #ef4444; color: #ef4444;"></svg>
+        </div>
+        <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 8px;">Ready to Align</h3>
+        <p style="font-size: 0.85rem; color: var(--text-muted);">
+          Use the input box in the top right toolbar to paste a YouTube link and begin extraction.
+        </p>
+      </div>
+
+      <!-- Extraction Progress Display -->
+      <div *ngIf="extractionStatus !== 'idle' && extractionStatus !== 'failed'" style="margin-top: 40px; width: 100%; max-width: 500px; text-align: center;">
+        <div style="font-weight: 600; font-size: 1.1rem; margin-bottom: 8px; color: var(--primary);">
+          <svg lucideRefreshCw class="animate-spin" style="display: inline-block; width: 20px; height: 20px; margin-right: 8px; vertical-align: middle;"></svg>
+          {{ extractionStatus === 'extracting_lyrics' ? 'Transcribing Lyrics...' : 'Processing...' }}
+        </div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">{{ extractionMessage }}</div>
+        
+        <div style="background: var(--inset-bg-strong); border-radius: 999px; height: 8px; overflow: hidden; border: 1px solid var(--border-color);">
+          <div [style.width.%]="extractionProgress * 100" style="background: linear-gradient(to right, var(--primary), var(--secondary)); height: 100%; border-radius: 999px; transition: width 0.3s ease-out; box-shadow: 0 0 8px var(--primary-glow);"></div>
+        </div>
+        <div style="font-weight: 700; font-size: 0.85rem; color: var(--primary); margin-top: 8px;">{{ (extractionProgress * 100).toFixed(0) }}%</div>
+      </div>
+    </div>
+
+    <!-- METADATA CONTROLLERS -->
+    <div *ngIf="extractionStatus === 'completed'" style="margin-bottom: 12px; display: flex; gap: 16px; background: var(--surface-1); padding: 8px 16px; border-radius: 12px; border: 1px solid var(--border-color);">
+      <div style="flex: 1; display: flex; flex-direction: column;">
+        <label style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">Song Name:</label>
+        <input type="text" [(ngModel)]="songTitle" placeholder="Song Name" style="padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); outline: none; font-weight: 500; font-size: 0.95rem; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);" />
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column;">
+        <label style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">Artist:</label>
+        <input type="text" [(ngModel)]="songArtist" placeholder="Artist" style="padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); outline: none; font-weight: 500; font-size: 0.95rem; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);" />
+      </div>
+    </div>
+
+    <!-- MAIN 3-COLUMN VIEW -->
+    <div *ngIf="extractionStatus === 'completed'" style="flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0; padding-bottom: 0px; overflow: hidden;">
+      
+      <!-- 1. Top: Lyrics -->
+      <div class="glass-panel" style="display: flex; flex-direction: column; min-height: 100px; flex: 1; padding: 16px; resize: vertical; overflow: hidden;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg lucideFileText style="width: 18px; height: 18px; color: var(--primary);"></svg>
+            <h2 style="font-size: 1rem; font-weight: 600; margin: 0;">Lyrics</h2>
+          </div>
+          <button *ngIf="lyricsData" class="btn btn-primary" (click)="saveEditedLyrics()" style="padding: 4px 10px; font-size: 0.75rem; border-radius: 4px;">
+            <svg lucideSave style="width: 12px; height: 12px; margin-right: 4px;"></svg> Sync
+          </button>
+        </div>
+        
+        <textarea *ngIf="lyricsData" [(ngModel)]="lyricsData" [dir]="isHebrew ? 'rtl' : 'ltr'" [style.text-align]="isHebrew ? 'right' : 'left'"
+             style="flex: 1; width: 100%; background: var(--inset-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; overflow-y: auto; color: var(--text-main); font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap; resize: none; outline: none; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);"></textarea>
+        
+        <div *ngIf="!lyricsData" style="flex: 1; display: flex; align-items: center; justify-content: center; background: var(--inset-bg); border: 1px solid var(--border-color); border-radius: 8px;">
+          <span style="color: var(--text-muted); font-size: 0.85rem;">Lyrics will appear here...</span>
+        </div>
+      </div>
+
+      <!-- 2. Middle: Chords -->
+      <div class="glass-panel" style="display: flex; flex-direction: column; min-height: 100px; flex: 1; padding: 16px; resize: vertical; overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg lucideLayers style="width: 18px; height: 18px; color: var(--secondary);"></svg>
+            <h2 style="font-size: 1rem; font-weight: 600; margin: 0;">Chords</h2>
+          </div>
+          <div *ngIf="songBpm > 0" style="display: flex; align-items: center; gap: 4px;">
+            <button class="btn btn-secondary" (click)="halfBpm()" style="padding: 2px 6px; font-size: 0.7rem; border-radius: 4px; min-width: unset;" title="Halve BPM">½×</button>
+            <span style="font-size: 0.75rem; background: var(--surface-1); padding: 4px 8px; border-radius: 4px; color: var(--secondary); font-weight: bold;">
+              {{ songBpm }} BPM
+            </span>
+            <button class="btn btn-secondary" (click)="doubleBpm()" style="padding: 2px 6px; font-size: 0.7rem; border-radius: 4px; min-width: unset;" title="Double BPM">2×</button>
+          </div>
+        </div>
+        <div class="chords-grid" style="flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; padding-right: 6px; align-content: start;">
+          <div *ngIf="parsedBars.length === 0" style="grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; height: 200px; color: var(--text-muted); font-size: 0.85rem; background: var(--inset-bg); border: 1px solid var(--border-color); border-radius: 8px;">
+            Chords will appear here...
+          </div>
+          
+          <div *ngFor="let bar of parsedBars; let idx = index" 
+               class="bar-card" 
+               [class.active-bar]="idx === activeBarIndex"
+               style="background: var(--surface-1); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); transition: all 0.2s ease;">
+            
+            <div class="bar-header" style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 0.75rem; font-weight: bold; color: var(--text-main); cursor: pointer;" (click)="seekToBar(bar)" title="Click to seek">Bar {{ bar.bar }}</span>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <select [ngModel]="bar.section || ''" (ngModelChange)="onSectionChange(idx, $event)" 
+                        style="padding: 2px 2px; font-size: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--surface-1); color: var(--text-muted); outline: none; cursor: pointer; max-width: 75px;">
+                  <option value="">—</option>
+                  <option *ngFor="let s of sectionOptions" [value]="s" [hidden]="!s">{{ s }}</option>
+                </select>
+                <span style="font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono);">{{ bar.timestamp }}</span>
+              </div>
+            </div>
+            
+            <div class="bar-beats" style="display: flex; gap: 4px;">
+              <div *ngFor="let beat of bar.beats" 
+                   [ngStyle]="{
+                     'background': beat.chord === 'N' ? 'transparent' : 'var(--inset-bg)',
+                     'color': beat.chord === 'N' ? 'var(--text-muted)' : (beat.isRepeated ? 'var(--text-muted)' : '#3b82f6'),
+                     'font-weight': beat.isRepeated || beat.chord === 'N' ? 'normal' : 'bold'
+                   }"
+                   style="flex: 1; text-align: center; padding: 4px 2px; border-radius: 4px; font-family: var(--font-mono); font-size: 0.75rem; outline: none; transition: box-shadow 0.2s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                   contenteditable="true"
+                   (keydown.enter)="$event.preventDefault(); $any($event.target).blur()"
+                   (focus)="$any($event.target).style.boxShadow='inset 0 0 0 1px var(--primary)'"
+                   (blur)="$any($event.target).style.boxShadow='none'; onChordTextChange(beat, $event)">
+                {{ beat.chord === 'N' ? '-' : (beat.isRepeated ? '(' + beat.chord + ')' : beat.chord) }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Bottom: Synced Sheet -->
+      <div class="glass-panel synced-sheet-container" 
+           [class.rtl-mode]="isHebrew"
+           style="display: flex; flex-direction: column; min-height: 300px; padding: 16px; flex: 1; overflow: hidden;">
+        
+        <!-- Sheet Header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <h2 style="font-size: 1rem; font-weight: 600; margin: 0;">Synced Sheet</h2>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; background: var(--surface-1); border-radius: 6px; padding: 2px; border: 1px solid var(--border-color);">
+              <button class="btn" [class.btn-primary]="sheetMode === 'view'" [class.btn-secondary]="sheetMode !== 'view'" (click)="sheetMode = 'view'" style="padding: 4px 10px; border-radius: 4px; min-width: unset; font-size: 0.75rem;">View</button>
+              <button class="btn" [class.btn-primary]="sheetMode === 'edit'" [class.btn-secondary]="sheetMode !== 'edit'" (click)="sheetMode = 'edit'" style="padding: 4px 10px; border-radius: 4px; min-width: unset; font-size: 0.75rem;">Edit</button>
+            </div>
+            
+            <button class="btn btn-primary" (click)="exportToSongbook()" [disabled]="isExporting" style="padding: 6px 12px; font-size: 0.75rem; gap: 4px; display: flex; align-items: center; border-radius: 6px;">
+              <svg *ngIf="isExporting" class="spinner" viewBox="0 0 50 50" style="width: 14px; height: 14px; animation: rotate 2s linear infinite;"><circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="5" style="stroke-dasharray: 1, 200; stroke-dashoffset: 0; animation: dash 1.5s ease-in-out infinite; stroke-linecap: round;"></circle></svg>
+              <svg *ngIf="!isExporting" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              {{ isExporting ? 'Exporting...' : 'Export' }}
+            </button>
+          </div>
+        </div>
+        
+        <!-- Synced Content -->
+        <div class="synced-content" *ngIf="syncedLines.length > 0" style="flex: 1; overflow-y: auto; padding-right: 6px;">
+          <ng-container *ngFor="let line of syncedLines; let i = index">
+            <!-- Section Break Spacer -->
+            <div *ngIf="line.sectionBreakBefore" class="section-break"></div>
+            
+            <div class="synced-block"
+                 [class.instrumental-block]="line.type === 'instrumental'"
+                 [class.lyric-block]="line.type === 'lyric'"
+                 [class.active-line]="i === activeLineIndex"
+                 [class.view-mode]="sheetMode === 'view'"
+                 [style.border]="sheetMode === 'view' ? 'none' : ''"
+                 [style.padding]="sheetMode === 'view' ? '0' : ''"
+                 [style.margin-bottom]="sheetMode === 'view' ? '12px' : ''">
+              
+              <!-- Instrumental Block -->
+              <div *ngIf="line.type === 'instrumental'" class="instrumental-text" dir="ltr" [style.color]="sheetMode === 'view' ? 'var(--secondary)' : ''">
+                {{ line.text }}
+              </div>
+              
+              <!-- Lyric Block -->
+              <ng-container *ngIf="line.type === 'lyric'">
+                <div class="lyric-wrapper" style="display: flex; flex-direction: column;" [dir]="isHebrew ? 'rtl' : 'ltr'">
+                  <div #chordRow class="chord-row" style="color: var(--secondary); font-weight: bold; font-family: var(--font-mono); min-height: 1.2rem; font-size: 0.95rem; line-height: 1; white-space: pre; margin-bottom: 2px;"
+                       [attr.contenteditable]="sheetMode === 'edit' ? 'plaintext-only' : 'false'"
+                       (blur)="sheetMode === 'edit' ? onSyncedChordTextChange(i, $event) : null"
+                       (keydown.enter)="$event.preventDefault(); chordRow.blur()">
+                    {{ line.chordText || ' ' }}
+                  </div>
+                  <div #textRow class="text-row" style="color: var(--text-main); font-size: 1.1rem; line-height: 1.4; white-space: pre-wrap; font-family: var(--font-mono);"
+                       [attr.contenteditable]="sheetMode === 'edit' ? 'plaintext-only' : 'false'"
+                       (blur)="sheetMode === 'edit' ? onSyncedLineTextChange(i, $event) : null"
+                       (keydown.enter)="$event.preventDefault(); textRow.blur()">
+                    {{ line.text }}
+                  </div>
+                </div>
+              </ng-container>
+            </div>
+          </ng-container>
+        </div>
+        
+        <!-- Fallback when no sync available -->
+        <div *ngIf="syncedLines.length === 0 && lyricsData" style="display: flex; flex-direction: column; gap: 16px; flex: 1;">
+          <div [dir]="isHebrew ? 'rtl' : 'ltr'" [style.text-align]="isHebrew ? 'right' : 'left'"
+               style="flex: 1; width: 100%; background: var(--inset-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; overflow-y: auto; color: var(--text-main); font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap;">
+            {{ lyricsData }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Settings Modal Overlay -->
+  <div *ngIf="showSettingsModal" style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 9999;">
+    <div class="glass-panel" style="width: 100%; max-width: 600px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 30px; position: relative;">
+      
+      <!-- Modal Header -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">
+          <svg lucideSettings style="width: 20px; height: 20px; color: var(--primary);"></svg>
+          Application Directories
+        </h2>
+        <button (click)="showSettingsModal = false" style="background: transparent; border: none; cursor: pointer; color: var(--text-muted);">
+          <svg lucideX style="width: 20px; height: 20px;"></svg>
+        </button>
+      </div>
+      
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">
+        Define where your audio downloads, lyrics, chords, and final sheet results should be saved. Absolute paths are required.
+      </p>
+
+      <!-- Settings Form -->
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div>
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px;">Audios Directory</label>
+          <input type="text" [(ngModel)]="appConfig.audios_dir" style="width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); outline: none; font-family: var(--font-mono); font-size: 0.8rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px;">Lyrics Directory</label>
+          <input type="text" [(ngModel)]="appConfig.lyrics_dir" style="width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); outline: none; font-family: var(--font-mono); font-size: 0.8rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px;">Chords Directory</label>
+          <input type="text" [(ngModel)]="appConfig.chords_dir" style="width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); outline: none; font-family: var(--font-mono); font-size: 0.8rem;" />
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px;">Sheets Directory</label>
+          <input type="text" [(ngModel)]="appConfig.sheets_dir" style="width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); outline: none; font-family: var(--font-mono); font-size: 0.8rem;" />
+        </div>
+
+        <!-- Advanced Fusion Settings -->
+        <div style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+          <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 12px;">Advanced Fusion Settings</h3>
+          <h4 style="font-size: 0.9rem; font-weight: 600; color: var(--primary); margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">Emission Weights</h4>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Essentia Match</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.emission_weights.essentia_match" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Librosa Match</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.emission_weights.librosa_match" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Madmom Match</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.emission_weights.madmom_match" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">None State Bias</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.emission_weights.none_state_bias" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+          </div>
+
+          <h4 style="font-size: 0.9rem; font-weight: 600; color: var(--primary); margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">Transition Probabilities</h4>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Self Transition</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.transition_probabilities.self_transition" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Same Root Diff Quality</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.transition_probabilities.same_root_diff_quality" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Circle of 5ths Dist 1</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.transition_probabilities.circle_of_fifths_dist_1" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Circle of 5ths Dist 2</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.transition_probabilities.circle_of_fifths_dist_2" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+            <div style="grid-column: span 2;">
+              <label style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Unrelated Chord</label>
+              <input type="number" step="0.0001" min="0" max="1" [(ngModel)]="songFusionConfig.transition_probabilities.unrelated_chord" style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--inset-bg); color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; outline: none;">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div style="margin-top: 30px; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.85rem; font-weight: 500; color: var(--primary);">{{ settingsMessage }}</span>
+        <div style="display: flex; gap: 10px;">
+          <button class="btn btn-secondary" (click)="showSettingsModal = false" style="padding: 8px 16px; font-size: 0.85rem;">Cancel</button>
+          <button class="btn btn-primary" (click)="saveSettings()" style="padding: 8px 24px; font-size: 0.85rem;">Save Settings</button>
+        </div>
+      </div>
+      
+    </div>
+  </div>
+</div>
