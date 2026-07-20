@@ -621,9 +621,37 @@ def extract_chords(audio_path, essentia_bin_path=None, manual_offset=None, confi
     y_librosa, sr_load = librosa.load(audio_path, sr=None)
     y_madmom, _ = librosa.load(audio_path, sr=44100)
 
-    # 3. Run Essentia native extractor
+    # 3. Beat and Downbeat Tracking using Madmom
     bpm = 120.0
     beats = []
+    ts = 4
+    estimated_offset = 0
+    madmom_beat_success = False
+    
+    try:
+        from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
+        from madmom.audio.signal import Signal
+        
+        y_float = y_madmom.astype(np.float32)
+        sig = Signal(y_float, sample_rate=44100)
+        
+        proc = RNNBeatProcessor()
+        act = proc(sig)
+        
+        processor = DBNBeatTrackingProcessor(fps=100)
+        madmom_beats = processor(act)
+        beats = [float(b) for b in madmom_beats]
+        
+        if len(beats) >= 4:
+            beat_diffs = np.diff(beats)
+            bpm = 60.0 / np.median(beat_diffs) if len(beat_diffs) > 0 else 120.0
+            madmom_beat_success = True
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Warning: Madmom beat extraction failed: {e}", file=sys.stderr)
+
+    # 4. Run Essentia native extractor for Chords and Key
     estimated_key = "Unknown"
     essentia_available = False
     smoothed_chords = []
@@ -632,11 +660,11 @@ def extract_chords(audio_path, essentia_bin_path=None, manual_offset=None, confi
         data, frames_data = run_essentia_extractor(essentia_bin_path, audio_path)
         essentia_available = True
         
-        rhythm = data.get("rhythm", {})
-        bpm = float(rhythm.get("bpm", 120.0))
-        beats = rhythm.get("beats_position", [])
-        
-        # The user requested to keep the raw, faster tempo. No BPM normalization here.
+        # If Madmom failed, fallback to Essentia beats
+        if not madmom_beat_success:
+            rhythm = data.get("rhythm", {})
+            bpm = float(rhythm.get("bpm", 120.0))
+            beats = rhythm.get("beats_position", [])
             
         key_edma = data.get("tonal", {}).get("key_edma", {})
         if key_edma:
@@ -652,13 +680,11 @@ def extract_chords(audio_path, essentia_bin_path=None, manual_offset=None, confi
     except Exception as e:
         print(f"Warning: Essentia extraction skipped. ({e})", file=sys.stderr)
 
-    # Fallback beat tracker if Essentia failed
+    # Fallback beat tracker if both Madmom and Essentia failed
     if not beats or len(beats) < 4:
         tempo, lib_beats = librosa.beat.beat_track(y=y_librosa, sr=sr_load)
         beats = list(librosa.frames_to_time(lib_beats, sr=sr_load))
         bpm = float(tempo[0]) if isinstance(tempo, np.ndarray) else float(tempo)
-        
-        # No BPM normalization
 
     # Align beat grid starting at 0.0 and ending at duration
     beats_extended = list(beats)
@@ -674,7 +700,7 @@ def extract_chords(audio_path, essentia_bin_path=None, manual_offset=None, confi
 
     beat_intervals = [(beats_extended[i], beats_extended[i+1]) for i in range(len(beats_extended)-1)]
 
-    # 4. Extract raw engine predictions
+    # 5. Extract raw engine predictions
     # Librosa
     librosa_chords = get_clean_librosa_beat_chords(y_librosa, sr_load, beat_intervals)
 
@@ -693,7 +719,7 @@ def extract_chords(audio_path, essentia_bin_path=None, manual_offset=None, confi
         print(f"Warning: Madmom extraction failed ({e}). Falling back to N.", file=sys.stderr)
         madmom_chords = ['N'] * len(beat_intervals)
 
-    # 5. HMM Viterbi Fusion
+    # 6. HMM Viterbi Fusion
     roots_list = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
     qualities_list = ['', 'm', '7', 'maj7', 'm7', 'dim', 'aug', 'sus4', 'sus2']
     
@@ -706,7 +732,7 @@ def extract_chords(audio_path, essentia_bin_path=None, manual_offset=None, confi
     transition_matrix = build_transition_matrix(hmm_states, config)
     fused_chords = viterbi_fusion(librosa_chords, essentia_chords, madmom_chords, hmm_states, transition_matrix, config)
 
-    # 6. Format SDK Output dictionary
+    # 7. Format SDK Output dictionary
     ts, estimated_offset = estimate_time_signature_and_offset(y_librosa, sr_load, np.array([start for start, end in beat_intervals]))
     
     # Allow manual override of the offset
