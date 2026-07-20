@@ -728,27 +728,6 @@ export class AppComponent implements OnInit, OnDestroy {
       this.apiService.saveChords(this.audioPath, flatBeats);
     }
 
-    // 2. Get all chord beats sorted by time, filtering out 'N' (no chord)
-    const allBeats: any[] = [];
-    this.parsedBars.forEach(bar => {
-      bar.beats.forEach(b => {
-        allBeats.push(b);
-      });
-    });
-    allBeats.sort((a, b) => a.start_time - b.start_time);
-
-    // 3. Deduplicate consecutive identical chords
-    const deduped: any[] = [];
-    let prevChord = '';
-    for (const beat of allBeats) {
-      if (beat.chord !== 'N' && beat.chord !== prevChord) {
-        deduped.push(beat);
-        prevChord = beat.chord;
-      } else if (beat.chord === 'N') {
-        prevChord = '';
-      }
-    }
-
     const result: any[] = [];
     let barIdx = 0;
 
@@ -778,11 +757,17 @@ export class AppComponent implements OnInit, OnDestroy {
       const line = lyricLines[i];
       const nextLineTime = i + 1 < lyricLines.length ? lyricLines[i + 1].time : Number.MAX_VALUE;
       
-      const lineEnd = nextLineTime !== Number.MAX_VALUE ? nextLineTime : line.time + 5;
-      const duration = lineEnd - line.time;
-
-      const consumeUntil = nextLineTime;
-      const lineBars = getBarsUntil(consumeUntil);
+      let actualLineEnd = nextLineTime !== Number.MAX_VALUE ? nextLineTime : line.time + 5;
+      
+      // If the gap is massive, limit the lyric line's duration to 5 seconds
+      if (actualLineEnd - line.time > 8.0) {
+          actualLineEnd = line.time + 5.0;
+      }
+      
+      const duration = actualLineEnd - line.time || 1;
+      
+      // Chords for the lyric line
+      const lineBars = getBarsUntil(actualLineEnd);
       
       const lineChords: any[] = [];
       lineBars.forEach(bar => {
@@ -794,44 +779,110 @@ export class AppComponent implements OnInit, OnDestroy {
       });
       lineChords.sort((a,b) => a.time - b.time);
 
-      let chordText = '';
-      let lastCharIdx = 0;
+      // 1. Build interpolation anchors
+      let anchors: {time: number, charIdx: number}[] = [];
+      anchors.push({ time: line.time, charIdx: 0 });
       
-      for (const chord of lineChords) {
-         let targetCharIdx = Math.floor(line.text.length * Math.max(0, Math.min(1, (chord.time - line.time) / duration)));
-         
-         if (this.wordTimestamps.length > 0) {
-            let bestDist = Infinity;
-            let bestWord: any = null;
-            for (const w of this.wordTimestamps) {
-               if (w.start >= line.time - 0.5 && w.start <= lineEnd + 0.5) {
-                  const dist = Math.abs(w.start - chord.time);
-                  if (dist < bestDist) {
-                     bestDist = dist;
-                     bestWord = w;
-                  }
-               }
-            }
-            if (bestWord && bestWord.word) {
-               const searchWord = bestWord.word.trim().toLowerCase();
-               const matchIdx = line.text.toLowerCase().indexOf(searchWord, lastCharIdx);
-               if (matchIdx !== -1) {
-                  targetCharIdx = matchIdx;
-               }
-            }
+      let lastCharIdx = 0;
+      let lastTime = line.time;
+      
+      if (this.wordTimestamps && this.wordTimestamps.length > 0) {
+          for (const w of this.wordTimestamps) {
+             if (w.start >= line.time - 1.0 && w.start <= actualLineEnd + 1.0) {
+                 const searchWord = w.word.trim().toLowerCase();
+                 // Find index starting from lastCharIdx to ensure monotonic progression
+                 const matchIdx = line.text.toLowerCase().indexOf(searchWord, lastCharIdx);
+                 if (matchIdx !== -1) {
+                     anchors.push({ time: w.start, charIdx: matchIdx });
+                     const endIdx = matchIdx + searchWord.length;
+                     anchors.push({ time: w.end || w.start + 0.3, charIdx: endIdx });
+                     lastCharIdx = endIdx;
+                     lastTime = w.end || w.start + 0.3;
+                 }
+             }
+          }
+      }
+      
+      // Final anchor for the end of the line (plus trailing gap space)
+      const timeRemaining = Math.max(0, actualLineEnd - lastTime);
+      const extraChars = Math.floor(timeRemaining * 3); // 3 chars per second of trailing gap
+      anchors.push({ time: actualLineEnd, charIdx: line.text.length + extraChars });
+      
+      // Clean anchors: strictly increasing in time, non-decreasing in charIdx
+      let cleanAnchors = [anchors[0]];
+      for (let j = 1; j < anchors.length; j++) {
+          const prev = cleanAnchors[cleanAnchors.length - 1];
+          const curr = anchors[j];
+          if (curr.time > prev.time) {
+              if (curr.charIdx < prev.charIdx) curr.charIdx = prev.charIdx;
+              cleanAnchors.push(curr);
+          }
+      }
+      anchors = cleanAnchors;
+
+      // Map chords using piecewise linear interpolation
+      const mappedChords = lineChords.map(chord => {
+         let targetCharIdx = 0;
+         if (chord.time <= anchors[0].time) {
+             targetCharIdx = anchors[0].charIdx;
+         } else if (chord.time >= anchors[anchors.length - 1].time) {
+             targetCharIdx = anchors[anchors.length - 1].charIdx;
+         } else {
+             for (let j = 0; j < anchors.length - 1; j++) {
+                 if (chord.time >= anchors[j].time && chord.time <= anchors[j+1].time) {
+                     const t0 = anchors[j].time;
+                     const t1 = anchors[j+1].time;
+                     const c0 = anchors[j].charIdx;
+                     const c1 = anchors[j+1].charIdx;
+                     const ratio = t1 === t0 ? 0 : (chord.time - t0) / (t1 - t0);
+                     targetCharIdx = Math.floor(c0 + ratio * (c1 - c0));
+                     break;
+                 }
+             }
          }
+         return { chord: chord.chord, targetCharIdx, time: chord.time, ltrPos: 0 };
+      });
+      
+      // Calculate max virtual length for correct LTR/RTL padding
+      let maxVirtualLength = line.text.length;
+      mappedChords.forEach(mc => {
+          if (mc.targetCharIdx + mc.chord.length > maxVirtualLength) {
+              maxVirtualLength = mc.targetCharIdx + mc.chord.length;
+          }
+      });
+      
+      // Calculate LTR absolute position for the string builder
+      mappedChords.forEach(mc => {
+          if (this.isHebrew) {
+              mc.ltrPos = Math.max(0, maxVirtualLength - mc.targetCharIdx - mc.chord.length);
+          } else {
+              mc.ltrPos = mc.targetCharIdx;
+          }
+      });
+      
+      mappedChords.sort((a, b) => a.ltrPos - b.ltrPos);
+
+      let chordText = '';
+      let lastPos = 0;
+      
+      for (const mc of mappedChords) {
+         let pos = mc.ltrPos;
+         if (pos < lastPos) pos = lastPos;
          
-         if (targetCharIdx < lastCharIdx) targetCharIdx = lastCharIdx;
-         
-         const spacesNeeded = targetCharIdx - chordText.length;
+         const spacesNeeded = pos - chordText.length;
          if (spacesNeeded > 0) {
             chordText += ' '.repeat(spacesNeeded);
          } else if (chordText.length > 0 && !chordText.endsWith(' ')) {
             chordText += ' ';
          }
          
-         chordText += chord.chord;
-         lastCharIdx = targetCharIdx;
+         chordText += mc.chord;
+         lastPos = chordText.length;
+      }
+      
+      // For Hebrew, pad with trailing spaces up to maxVirtualLength to push right-aligned text leftward
+      if (this.isHebrew && chordText.length < maxVirtualLength) {
+          chordText += ' '.repeat(maxVirtualLength - chordText.length);
       }
       
       result.push({
@@ -844,6 +895,19 @@ export class AppComponent implements OnInit, OnDestroy {
         sectionName: line.sectionName,
         rawLineIndex: line.rawLineIndex
       });
+      
+      // Gap / Instrumental
+      if (nextLineTime !== Number.MAX_VALUE && actualLineEnd < nextLineTime) {
+          const gapBars = getBarsUntil(nextLineTime);
+          if (gapBars.length > 0) {
+              result.push({
+                  type: 'instrumental',
+                  text: this.formatInstrumentalBars(gapBars),
+                  bars: gapBars,
+                  time: gapBars[0].time
+              });
+          }
+      }
     }
 
     // 3. Outro instrumental
