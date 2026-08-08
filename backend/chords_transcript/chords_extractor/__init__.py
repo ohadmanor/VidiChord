@@ -1,1 +1,0 @@
-# Chords Extractor SDK Package
