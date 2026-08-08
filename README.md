@@ -73,16 +73,26 @@ rarely changes chord for a single beat, so those are almost always noise.
 
 ## Setup
 
-**Python 3.11 or 3.12 is recommended.** Everything works on 3.13/3.14 too,
-except `madmom`, which has no wheels beyond 3.12 and will not build against
-NumPy 2.x. Without it VidiChord still runs, but bar lines are estimated from
-onset energy rather than tracked, and chords are fused from two engines instead
-of three.
+**Use Python 3.12.** Everything else works on 3.13/3.14, but `madmom` — which
+supplies downbeat tracking and one of the three chord engines — cannot be built
+there. Without it VidiChord still runs, with bar lines estimated from onset
+energy rather than tracked and chords fused from two engines instead of three.
 
 ```bat
 cd backend
 setup.bat            :: creates .venv and installs dependencies
 start_backend.bat    :: launches the app and opens a browser
+```
+
+`setup.bat` handles madmom's three quirks: its `setup.py` imports Cython
+without declaring it (so the build runs with `--no-build-isolation`), the PyPI
+sdist ships C files including `longintrepr.h` which Python 3.12 removed (so it
+installs from git and lets Cython regenerate them), and it needs NumPy 1.x at
+build time. It also needs a C compiler:
+
+```bat
+winget install Microsoft.VisualStudio.2022.BuildTools ^
+  --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools"
 ```
 
 The frontend needs building once:
@@ -154,10 +164,19 @@ noise improvements can be measured rather than eyeballed:
 
 | Song | Before | After |
 |---|---|---|
-| Always On My Mind | 2.20 changes/bar, 48.9% short runs | 0.86, 0% |
-| עוד לא תמו כל פלאייך | 1.96 changes/bar, 46.2% short runs | 0.89, 0% |
+| Always On My Mind | 2.20 changes/bar, 48.9% short runs, 23 chords | **1.10, 0%, 10 chords** |
+| עוד לא תמו כל פלאייך | 1.96 changes/bar, 46.2% short runs, 26 chords | **1.03, 0%, 22 chords** |
 
-(Measured without madmom, so with two of three engines.)
+Runs under two beats — the flicker that made the old output hard to read — are
+gone entirely, and the chord vocabulary roughly halves as spurious chords are
+absorbed into their neighbours.
+
+Without madmom the same songs give 0.86 and 0.89 changes/bar, but that number
+is flattered by stretches decoded as silence: with two engines and no downbeat
+tracking, whole bars come back as no-chord. Fewer changes, less music.
+
+madmom also costs time — roughly 280s per song against 75s without, because its
+RNN beat tracker and CNN chord model both run over the full audio.
 
 ### Layout
 
