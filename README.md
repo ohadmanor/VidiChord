@@ -116,10 +116,11 @@ yt-dlp with some YouTube downloads.
 - `library_dir` — where songs are stored, one folder each
 - `sheets_dir` — where "Export to songbook" writes
 
-The file is gitignored. Copy `config.example.json` to start. No secrets belong
-in it; the optional LLM key is read from `VIDICHORD_LLM_API_KEY`.
+The file is gitignored. Copy `config.example.json` to start. It holds no
+secrets, and VidiChord needs no API keys at all — lyrics come from LRClib and
+Genius, both open, and transcription runs locally.
 
-Other environment variables:
+Environment variables:
 
 | Variable | Effect |
 |---|---|

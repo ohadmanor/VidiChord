@@ -10,7 +10,8 @@ Replaces the old ``config_manager`` module. Two directories are configurable:
     Where songbook exports are written. Usually points at an external songbook
     checkout, which is why it is kept separate from the library.
 
-Secrets are never stored in ``config.json`` - they come from the environment.
+There are no secrets here. Nothing in VidiChord calls a paid API: lyrics come
+from LRClib and Genius, and transcription runs locally.
 """
 
 from __future__ import annotations
@@ -47,9 +48,6 @@ _FRONTEND_CANDIDATES = (
 )
 
 DEFAULT_LIBRARY_DIR = REPO_DIR / "VidiChord_Files"
-
-#: Environment variable holding the LLM key, if the optional refiner is used.
-LLM_API_KEY_ENV = "VIDICHORD_LLM_API_KEY"
 
 PORT = 8001
 
@@ -131,8 +129,3 @@ class Settings:
         except (ValueError, OSError):
             return False
         return True
-
-
-def llm_api_key() -> str | None:
-    """Return the optional LLM API key from the environment."""
-    return os.environ.get(LLM_API_KEY_ENV) or None
