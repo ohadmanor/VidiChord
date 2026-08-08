@@ -1,0 +1,130 @@
+.grid-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 0.75rem;
+}
+
+.grid-toolbar .meta {
+  color: var(--secondary);
+  background: var(--surface-1);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.grid-toolbar .spacer {
+  flex: 1;
+}
+
+.grid-toolbar .btn {
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  min-width: unset;
+}
+
+.estimate-warning {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: help;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.bar {
+  background: var(--surface-1);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s ease;
+}
+
+.bar.active {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+
+.bar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.7rem;
+}
+
+.bar-number {
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bar-number:hover {
+  color: var(--primary);
+}
+
+.bar-time {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+.bar-beats {
+  display: flex;
+  gap: 4px;
+}
+
+.beat {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  padding: 4px 2px;
+  border-radius: 4px;
+  background: var(--inset-bg);
+  color: #3b82f6;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  outline: none;
+}
+
+/* A beat that repeats the previous chord is dimmed, so changes stand out. */
+.beat.repeat {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.beat.silent {
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.beat:focus {
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.empty {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  background: var(--inset-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}

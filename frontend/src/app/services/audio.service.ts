@@ -46,10 +46,11 @@ export class AudioService implements OnDestroy {
     this.listeners.push({ name: event, handler });
   }
 
-  public loadTrack(path: string) {
-    if (!path) return;
-    this.currentTrackPath.set(path);
-    this.audio.src = `http://127.0.0.1:8001/api/stream-audio?path=${encodeURIComponent(path)}`;
+  /** Point the player at a fully-formed audio URL. */
+  public loadTrack(url: string) {
+    if (!url || url === this.currentTrackPath()) return;
+    this.currentTrackPath.set(url);
+    this.audio.src = url;
     this.audio.load();
     this.isPlaying.set(false);
     this.currentTime.set(0);

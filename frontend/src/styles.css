@@ -9,11 +9,9 @@ html, body, app-root {
   box-sizing: border-box;
 }
 
-app-review-editor, app-lyrics-syncer, app-chord-sheet-editor {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
+app-sheet-view, app-chord-grid {
+  display: block;
+  min-width: 0;
 }
 
 :root {

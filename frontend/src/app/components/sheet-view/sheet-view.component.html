@@ -1,0 +1,54 @@
+<div class="sheet" [class.rtl]="isRtl()">
+  <div
+    *ngFor="let block of blocks(); let i = index; trackBy: trackByIndex"
+    class="block"
+    [class.active]="i === activeIndex()"
+    [class.block-section]="isSection(block)"
+    [class.block-instrumental]="isInstrumental(block)"
+    [class.block-lyric]="isLyric(block)"
+    (click)="seek.emit(blockStart(block))"
+  >
+    <!-- Section heading -->
+    <ng-container *ngIf="isSection(block)">
+      <div class="section-name" [attr.data-kind]="block.kind">{{ block.name }}</div>
+    </ng-container>
+
+    <!-- Instrumental passage, written as a bar chart -->
+    <ng-container *ngIf="isInstrumental(block)">
+      <div
+        class="instrumental"
+        dir="ltr"
+        [attr.contenteditable]="editable ? 'plaintext-only' : 'false'"
+        (blur)="editable && onInstrumentalEdit(i, block, $event)"
+        (keydown.enter)="$event.preventDefault(); $any($event.target).blur()"
+      >{{ block.text }}</div>
+    </ng-container>
+
+    <!-- Lyric line with its chord row -->
+    <ng-container *ngIf="isLyric(block)">
+      <!--
+        The chord row keeps dir="ltr" whatever the song's direction: its
+        alignment lives in the spacing the backend generated, and letting the
+        browser reorder it would destroy that.
+      -->
+      <div
+        class="chord-row"
+        dir="ltr"
+        [attr.contenteditable]="editable ? 'plaintext-only' : 'false'"
+        (blur)="editable && onChordEdit(i, block, $event)"
+        (keydown.enter)="$event.preventDefault(); $any($event.target).blur()"
+      >{{ block.chord_line || ' ' }}</div>
+      <div
+        class="lyric-row"
+        [attr.dir]="isRtl() ? 'rtl' : 'ltr'"
+        [attr.contenteditable]="editable ? 'plaintext-only' : 'false'"
+        (blur)="editable && onLyricEdit(i, block, $event)"
+        (keydown.enter)="$event.preventDefault(); $any($event.target).blur()"
+      >{{ block.text }}</div>
+    </ng-container>
+  </div>
+
+  <div *ngIf="blocks().length === 0" class="empty">
+    The sheet will appear here once the song has been processed.
+  </div>
+</div>

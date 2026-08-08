@@ -1,0 +1,48 @@
+<div class="grid-toolbar" *ngIf="chords">
+  <span class="meta">
+    <strong>{{ chords.bpm }}</strong> BPM &middot; {{ chords.time_signature }}/4
+    <ng-container *ngIf="chords.key"> &middot; {{ chords.key }}</ng-container>
+  </span>
+  <span
+    class="estimate-warning"
+    *ngIf="!chords.downbeats_tracked"
+    title="Bar lines were estimated from onset energy because downbeat tracking was unavailable. Install madmom for a tracked grid."
+    >bar lines estimated</span
+  >
+  <span class="spacer"></span>
+  <button type="button" class="btn btn-secondary" (click)="changeResolution(0.5)" title="Halve the beat resolution">
+    &frac12;&times;
+  </button>
+  <button type="button" class="btn btn-secondary" (click)="changeResolution(2)" title="Double the beat resolution">
+    2&times;
+  </button>
+</div>
+
+<div class="grid">
+  <div
+    *ngFor="let bar of bars(); let i = index; trackBy: trackByBar"
+    class="bar"
+    [class.active]="i === activeBarIndex()"
+  >
+    <div class="bar-header">
+      <span class="bar-number" (click)="seek.emit(bar.start)" title="Click to seek">
+        Bar {{ bar.index }}
+      </span>
+      <span class="bar-time">{{ timestamp(bar.start) }}</span>
+    </div>
+    <div class="bar-beats">
+      <div
+        *ngFor="let beat of bar.beats; let p = index"
+        class="beat"
+        [class.silent]="beat.chord === 'N'"
+        [class.repeat]="isRepeat(bar, p)"
+        [title]="beat.sources | json"
+        contenteditable="true"
+        (keydown.enter)="$event.preventDefault(); $any($event.target).blur()"
+        (blur)="onChordEdit(bar, beat, $event)"
+      >{{ display(beat, isRepeat(bar, p)) }}</div>
+    </div>
+  </div>
+
+  <div *ngIf="bars().length === 0" class="empty">Chords will appear here...</div>
+</div>

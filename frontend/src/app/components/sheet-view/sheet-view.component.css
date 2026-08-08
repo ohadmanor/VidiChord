@@ -1,0 +1,107 @@
+.sheet {
+  font-family: var(--font-mono);
+  line-height: 1.35;
+  padding: 4px 2px;
+}
+
+.block {
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.block:hover {
+  background: var(--inset-bg);
+}
+
+.block.active {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.sheet.rtl .block.active {
+  box-shadow: inset -2px 0 0 var(--primary);
+}
+
+/* --- section headings --- */
+
+.block-section {
+  margin-top: 14px;
+}
+
+.block-section:first-child {
+  margin-top: 0;
+}
+
+.section-name {
+  font-family: var(--font-display, inherit);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 6px;
+}
+
+.section-name[data-kind='chorus'] {
+  color: var(--chord-color, var(--secondary));
+}
+
+.section-name[data-kind='solo'],
+.section-name[data-kind='intro'],
+.section-name[data-kind='outro'],
+.section-name[data-kind='interlude'] {
+  color: var(--text-muted);
+}
+
+/* --- instrumental bar charts --- */
+
+.instrumental {
+  color: var(--secondary);
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  padding: 2px 0;
+  outline: none;
+}
+
+/* --- lyric lines --- */
+
+/*
+ * Both rows are monospace and preserve whitespace exactly. The chord row is
+ * positioned purely by the spaces the backend put in it, so any change to
+ * font or white-space handling here will pull chords off their syllables.
+ */
+.chord-row {
+  color: var(--secondary);
+  font-weight: 700;
+  font-size: 0.92rem;
+  line-height: 1.1;
+  white-space: pre;
+  min-height: 1.1em;
+  overflow-x: auto;
+  outline: none;
+}
+
+.lyric-row {
+  color: var(--text-main);
+  font-size: 1.02rem;
+  white-space: pre-wrap;
+  outline: none;
+}
+
+[contenteditable='plaintext-only']:focus {
+  background: var(--inset-bg);
+  box-shadow: inset 0 0 0 1px var(--primary);
+  border-radius: 3px;
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 40px 0;
+}
