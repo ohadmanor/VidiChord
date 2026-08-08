@@ -30,7 +30,13 @@ def app_and_library(tmp_path):
     library.mkdir()
 
     app = create_app()
-    app.state.settings = Settings(library_dir=library, sheets_dir=tmp_path / "sheets")
+    # Point `path` at a throwaway file: PUT /api/config persists to disk, and
+    # a test must never write over the real backend/config.json.
+    app.state.settings = Settings(
+        library_dir=library,
+        sheets_dir=tmp_path / "sheets",
+        path=tmp_path / "config.json",
+    )
     (tmp_path / "sheets").mkdir()
 
     project = SongProject.create(library, SONG_ID)
@@ -191,6 +197,17 @@ class TestConfig:
         )
         assert response.status_code == 200
         assert response.json()["library_dir"] == str(tmp_path / "new")
+
+    def test_saving_does_not_touch_the_real_config_file(self, client, tmp_path):
+        from vidichord.config import CONFIG_PATH
+
+        before = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.is_file() else None
+        client.put(
+            "/api/config",
+            json={"library_dir": str(tmp_path / "elsewhere"), "sheets_dir": ""},
+        )
+        after = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.is_file() else None
+        assert after == before
 
 
 class TestRouting:

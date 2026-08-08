@@ -255,6 +255,38 @@ class TestSheetBuild:
         assert build(lyrics, ChordsDoc()).is_rtl
 
 
+class TestTextDirection:
+    """Direction follows the text that will actually be rendered.
+
+    The language code and the lyrics can disagree - Whisper sometimes
+    transliterates Hebrew into Latin script and reports a European language,
+    and web lyrics can be in Hebrew script when the audio was misidentified.
+    """
+
+    def test_hebrew_script_wins_over_a_wrong_language_code(self):
+        doc = LyricsDoc(language="en", lines=[
+            LyricLine(index=0, time=0.0, end=1.0, text="עוד לא תמו כל פלאיך")
+        ])
+        assert doc.is_rtl
+
+    def test_latin_transliteration_is_not_treated_as_rtl(self):
+        doc = LyricsDoc(language="he", lines=[
+            LyricLine(index=0, time=0.0, end=1.0, text="od lo tamu kol pelaich")
+        ])
+        assert not doc.is_rtl
+
+    def test_falls_back_to_the_language_code_with_no_text(self):
+        assert LyricsDoc(language="he").is_rtl
+        assert not LyricsDoc(language="en").is_rtl
+
+    def test_mixed_content_with_any_hebrew_is_rtl(self):
+        doc = LyricsDoc(language="en", lines=[
+            LyricLine(index=0, time=0.0, end=1.0, text="intro"),
+            LyricLine(index=1, time=1.0, end=2.0, text="שלום עולם"),
+        ])
+        assert doc.is_rtl
+
+
 class TestExport:
     def test_renders_songbook_text(self):
         from vidichord.models import SheetDoc

@@ -35,6 +35,7 @@ from .models import (
     Manifest,
     SheetDoc,
     SourceDoc,
+    StageState,
     utcnow,
 )
 
@@ -198,17 +199,38 @@ class SongProject:
 
 
 def summarise(project: SongProject) -> dict:
-    """Compact description of a project for the library listing."""
+    """Compact description of a project for the library listing.
+
+    Stage states come from the manifest, but an artifact present on disk is
+    taken as proof the stage ran - the folder is the source of truth, and a
+    manifest can be out of date if a stage was run outside the job system.
+    """
     manifest = project.read_manifest()
+
+    produced = {
+        "audio": project.audio_path.is_file(),
+        "lyrics": project.has(LyricsDoc),
+        "chords": project.has(ChordsDoc),
+        "sheet": project.has(SheetDoc),
+    }
+
+    stages: dict[str, str] = {}
+    for name in STAGE_NAMES:
+        status = manifest.stages.get(name)
+        state = status.state.value if status else StageState.PENDING.value
+        if produced.get(name) and state in (
+            StageState.PENDING.value,
+            StageState.RUNNING.value,
+        ):
+            state = StageState.DONE.value
+        stages[name] = state
+
     return {
         "song_id": project.song_id,
         "title": manifest.title,
         "artist": manifest.artist,
         "language": manifest.language,
         "updated_at": manifest.updated_at,
-        "has_audio": project.audio_path.is_file(),
-        "stages": {
-            name: manifest.stages.get(name).state if manifest.stages.get(name) else "pending"
-            for name in STAGE_NAMES
-        },
+        "has_audio": produced["audio"],
+        "stages": stages,
     }

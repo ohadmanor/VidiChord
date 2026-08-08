@@ -42,6 +42,10 @@ _GENERIC_TERMS = {
 #: Assumed length of the final lyric line, which has nothing after it.
 _TRAILING_LINE_SECONDS = 4.0
 
+#: A gap this short between lines is treated as part of the earlier line;
+#: anything longer is a genuine break in the singing.
+_MAX_GAP_TO_ABSORB = 4.0
+
 
 # ---------------------------------------------------------------------------
 # Transcript caching
@@ -68,11 +72,22 @@ def _save_transcript(context: StageContext, language: str, segments: list[dict])
 
 def _transcribe(context: StageContext) -> tuple[str, list[dict]]:
     """Transcribe the audio, reusing a cached transcript when one exists."""
+    requested = context.param("language")
+
     if not context.param("retranscribe", False):
         cached = _load_transcript(context)
-        if cached is not None:
+        # A cached transcript in the wrong language is worse than useless: it
+        # was produced by the wrong model. Asking for a specific language has
+        # to override the cache.
+        if cached is not None and (requested is None or cached[0] == requested):
             context.report("Reusing cached transcript.", 30.0)
             return cached
+        if cached is not None:
+            context.report(
+                f"Cached transcript is {cached[0]}, but {requested} was asked "
+                "for - transcribing again.",
+                None,
+            )
 
     engine = WhisperEngine()
     prompt = context.param("lyrics") if context.param("choice") == "manual" else None
@@ -272,12 +287,21 @@ def _build_lines(
             LyricLine(index=index, time=start, end=max(end, start), text=text, words=words)
         )
 
-    # Line ends should reach the next line, so a chord landing in the gap has
-    # somewhere to sit.
+    # Close a small gap to the next line so a chord landing just after the last
+    # word still belongs to it. A large gap is left open: nobody is singing
+    # there, and stage 4 will render it as an instrumental passage. Stretching
+    # every line to meet the next one instead would crowd a whole interlude's
+    # worth of chords onto one short lyric.
     for index in range(len(built) - 1):
-        built[index].end = max(built[index].end, min(built[index + 1].time, duration or built[index + 1].time))
+        next_start = built[index + 1].time
+        if next_start - built[index].end <= _MAX_GAP_TO_ABSORB:
+            built[index].end = max(built[index].end, next_start)
+        built[index].end = min(built[index].end, next_start)
+
     if built:
         built[-1].end = max(built[-1].end, built[-1].time + _TRAILING_LINE_SECONDS)
+        if duration:
+            built[-1].end = min(built[-1].end, duration)
 
     return built
 

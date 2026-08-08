@@ -66,10 +66,14 @@ class Settings:
     """User-editable settings, persisted to ``backend/config.json``."""
 
     def __init__(self, library_dir: str | os.PathLike[str] | None = None,
-                 sheets_dir: str | os.PathLike[str] | None = None) -> None:
+                 sheets_dir: str | os.PathLike[str] | None = None,
+                 path: Path | None = None) -> None:
         self.library_dir = Path(library_dir) if library_dir else DEFAULT_LIBRARY_DIR
         # Empty means "not configured"; export refuses to run until it is set.
         self.sheets_dir = Path(sheets_dir) if sheets_dir else None
+        #: Where :meth:`save` writes. Overridable so tests never touch the
+        #: user's real config file.
+        self.path = Path(path) if path else CONFIG_PATH
 
     # -- serialisation -----------------------------------------------------
 
@@ -80,32 +84,34 @@ class Settings:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Settings":
+    def from_dict(cls, data: dict[str, Any], path: Path | None = None) -> "Settings":
         return cls(
             library_dir=data.get("library_dir") or None,
             sheets_dir=data.get("sheets_dir") or None,
+            path=path,
         )
 
     # -- persistence -------------------------------------------------------
 
     @classmethod
-    def load(cls) -> "Settings":
+    def load(cls, path: Path | None = None) -> "Settings":
         """Read settings from disk, falling back to defaults on any problem."""
-        if CONFIG_PATH.is_file():
+        path = Path(path) if path else CONFIG_PATH
+        if path.is_file():
             try:
-                with CONFIG_PATH.open("r", encoding="utf-8") as handle:
-                    settings = cls.from_dict(json.load(handle))
+                with path.open("r", encoding="utf-8") as handle:
+                    settings = cls.from_dict(json.load(handle), path=path)
                 settings.ensure_directories()
                 return settings
             except (OSError, ValueError):
                 # A corrupt config should not stop the app from starting.
                 pass
-        settings = cls()
+        settings = cls(path=path)
         settings.ensure_directories()
         return settings
 
     def save(self) -> None:
-        with CONFIG_PATH.open("w", encoding="utf-8") as handle:
+        with self.path.open("w", encoding="utf-8") as handle:
             json.dump(self.to_dict(), handle, indent=4)
         self.ensure_directories()
 

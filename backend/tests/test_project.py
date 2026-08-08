@@ -122,7 +122,19 @@ class TestManifest:
         project.update_stage(1, StageState.DONE)
         summary = summarise(project)
         assert summary["song_id"] == "song"
-        assert summary["stages"]["audio"] is StageState.DONE
+        assert summary["stages"]["audio"] == StageState.DONE.value
+
+    def test_an_artifact_on_disk_counts_as_a_finished_stage(self, library):
+        """The folder is the source of truth, not a possibly-stale manifest."""
+        project = SongProject.create(library, "song")
+        project.write(SheetDoc(title="built outside the job system"))
+        assert summarise(project)["stages"]["sheet"] == StageState.DONE.value
+
+    def test_a_failed_stage_is_not_overridden_by_a_stale_artifact(self, library):
+        project = SongProject.create(library, "song")
+        project.write(SheetDoc())
+        project.update_stage(4, StageState.FAILED, error="boom")
+        assert summarise(project)["stages"]["sheet"] == StageState.FAILED.value
 
     def test_new_manifest_starts_pending(self):
         manifest = Manifest(song_id="x")

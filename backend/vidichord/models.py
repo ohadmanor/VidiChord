@@ -14,6 +14,7 @@ All times are floating-point seconds from the start of the audio.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Literal
@@ -119,6 +120,13 @@ class LyricsSource(str, Enum):
     RAW = "raw"
 
 
+#: Hebrew block, including presentation forms.
+_RTL_SCRIPT = re.compile(r"[֐-׿יִ-ﭏ]")
+
+#: Languages written right to left that this app can produce.
+RTL_LANGUAGES = frozenset({"he", "iw", "yi"})
+
+
 class LyricsDoc(Artifact):
     language: str = "en"
     source: LyricsSource = LyricsSource.RAW
@@ -129,7 +137,21 @@ class LyricsDoc(Artifact):
 
     @property
     def is_rtl(self) -> bool:
-        return self.language == "he"
+        """Whether the sheet should be laid out right to left.
+
+        Decided from the lyrics themselves rather than the detected language
+        code. The two can disagree: Whisper sometimes transliterates Hebrew
+        into Latin script and reports a European language, and lyrics fetched
+        from the web can be in Hebrew script even when the audio was
+        misidentified. What is actually going to be rendered is what matters.
+        """
+        for line in self.lines:
+            if _RTL_SCRIPT.search(line.text):
+                return True
+        if any(line.text.strip() for line in self.lines):
+            # There is real text and none of it is Hebrew.
+            return False
+        return self.language in RTL_LANGUAGES
 
     def section_for(self, line_index: int) -> Section | None:
         for section in self.sections:

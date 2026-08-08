@@ -379,7 +379,9 @@ def create_app() -> FastAPI:
 
     @app.put("/api/config")
     def put_config(request: SettingsRequest) -> dict:
-        updated = Settings.from_dict(request.model_dump())
+        # Keep writing to wherever the current settings came from, so a test
+        # or an alternate install never writes over the user's config file.
+        updated = Settings.from_dict(request.model_dump(), path=settings().path)
         updated.save()
         app.state.settings = updated
         return updated.to_dict()
