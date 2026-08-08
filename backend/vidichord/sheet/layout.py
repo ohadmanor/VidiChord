@@ -140,7 +140,10 @@ def render_chord_row(
         placements = [
             (max(0, width - column - len(chord)), chord) for column, chord in placements
         ]
-    placements.sort()
+    # Sort on the column alone. Python's sort is stable, so two chords landing
+    # in the same column keep the order they were played in - sorting on the
+    # whole tuple would reorder them alphabetically instead.
+    placements.sort(key=lambda placement: placement[0])
 
     row: list[str] = []
     length = 0

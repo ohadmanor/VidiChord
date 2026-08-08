@@ -1,23 +1,43 @@
 @echo off
-echo Building Angular Frontend...
-cd frontend
+REM Build a standalone VidiChord.exe: Angular app first, then PyInstaller.
+setlocal
+cd /d "%~dp0"
+
+echo === Building the Angular frontend ===
+pushd frontend
+call npm ci
+if errorlevel 1 call npm install
 call npm run build
-if %errorlevel% neq 0 (
-    echo Frontend build failed!
+if errorlevel 1 (
+    echo Frontend build failed.
+    popd
     pause
-    exit /b %errorlevel%
+    exit /b 1
 )
-cd ..
+popd
 
-echo Installing PyInstaller...
-cd backend
-call .venv\Scripts\activate
-pip install pyinstaller
+echo.
+echo === Building the executable ===
+pushd backend
+if not exist ".venv\Scripts\python.exe" (
+    echo No virtual environment found. Run backend\setup.bat first.
+    popd
+    pause
+    exit /b 1
+)
+call .venv\Scripts\activate.bat
+python -m pip install --upgrade pyinstaller
 
-echo Running PyInstaller...
 pyinstaller VidiChord.spec --noconfirm
+if errorlevel 1 (
+    echo PyInstaller failed.
+    popd
+    pause
+    exit /b 1
+)
+popd
 
-echo Done!
-echo The bundled executable is located in:
-echo C:\Develop\Github\VidiChord\backend\dist\VidiChord\VidiChord.exe
+echo.
+echo Done. The bundle is in:
+echo   %CD%\backend\dist\VidiChord\VidiChord.exe
 pause
