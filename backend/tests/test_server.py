@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vidichord.config import Settings
+from vidichord.jobs import Job
 from vidichord.models import (
     Bar,
     Beat,
@@ -228,3 +229,110 @@ class TestRouting:
 
     def test_unknown_job_is_404(self, client):
         assert client.get("/api/jobs/nope").status_code == 404
+
+
+class _RecordingJobs:
+    """Stands in for the JobManager, recording runs instead of starting them.
+
+    Which stages a request would run is the behaviour under test; actually
+    running them needs real audio.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[int, ...]]] = []
+
+    def submit(self, song_id, stages, _build_context):
+        self.calls.append((song_id, tuple(stages)))
+        return Job(job_id="job", song_id=song_id, stages=tuple(stages))
+
+    def for_song(self, _song_id):
+        return None
+
+    def get(self, _job_id):
+        return None
+
+
+class TestReview:
+    """The review step: correct the lyrics and chords, then sync."""
+
+    @pytest.fixture
+    def recorder(self, app_and_library):
+        app, _library, _project = app_and_library
+        recorder = _RecordingJobs()
+        app.state.jobs = recorder
+        return recorder
+
+    def test_a_reviewed_run_stops_before_the_sheet(self, client, recorder):
+        client.post(f"/api/songs/{SONG_ID}/stages/2/rerun", json={"review": True})
+        assert recorder.calls[-1][1] == (2, 3)
+
+    def test_an_ordinary_run_still_reaches_the_sheet(self, client, recorder):
+        client.post(f"/api/songs/{SONG_ID}/stages/2/rerun", json={})
+        assert recorder.calls[-1][1] == (2, 3, 4)
+
+    def test_review_never_drops_the_stage_that_was_asked_for(self, client, recorder):
+        # Reviewing stops before stage 4, but asking for stage 4 outranks that.
+        client.post(f"/api/songs/{SONG_ID}/stages/4/rerun", json={"review": True})
+        assert recorder.calls[-1][1] == (4,)
+
+    def test_a_reviewed_lyrics_choice_stops_before_the_sheet(self, client, recorder):
+        client.post(
+            f"/api/songs/{SONG_ID}/lyrics/choice",
+            json={"choice": "ai", "review": True},
+        )
+        assert recorder.calls[-1][1] == (2, 3)
+
+    def test_saving_chords_for_review_leaves_the_sheet_alone(self, client):
+        chords = client.get(f"/api/songs/{SONG_ID}/chords").json()
+        chords["bars"][0]["beats"][0]["chord"] = "Am"
+
+        response = client.put(
+            f"/api/songs/{SONG_ID}/chords?rebuild=false", json=chords
+        )
+        assert response.status_code == 200
+        assert client.get(f"/api/songs/{SONG_ID}/chords").json()["bars"][0]["beats"][0][
+            "chord"
+        ] == "Am"
+        # The fixture's sheet has no blocks; a rebuild would have given it some.
+        assert client.get(f"/api/songs/{SONG_ID}/sheet").json()["blocks"] == []
+
+    def test_saving_lyrics_for_review_leaves_the_sheet_alone(self, client):
+        lyrics = client.get(f"/api/songs/{SONG_ID}/lyrics").json()
+        lyrics["lines"][0]["text"] = "changed words"
+
+        response = client.put(
+            f"/api/songs/{SONG_ID}/lyrics?rebuild=false", json=lyrics
+        )
+        assert response.status_code == 200
+        assert client.get(f"/api/songs/{SONG_ID}/sheet").json()["blocks"] == []
+
+    def test_sync_builds_the_sheet_from_both_and_returns_it(self, client):
+        lyrics = client.get(f"/api/songs/{SONG_ID}/lyrics").json()
+        lyrics["lines"][0]["text"] = "changed words"
+        client.put(f"/api/songs/{SONG_ID}/lyrics?rebuild=false", json=lyrics)
+
+        chords = client.get(f"/api/songs/{SONG_ID}/chords").json()
+        chords["bars"][0]["beats"][0]["chord"] = "Am"
+        client.put(f"/api/songs/{SONG_ID}/chords?rebuild=false", json=chords)
+
+        response = client.post(f"/api/songs/{SONG_ID}/sync")
+        assert response.status_code == 200
+
+        blocks = response.json()["blocks"]
+        assert any(block.get("text") == "changed words" for block in blocks)
+        # Both edits reach the sheet from one sync, not just the last saved.
+        assert any("Am" in (block.get("chord_line") or "") for block in blocks)
+        # And what came back is what was stored.
+        assert client.get(f"/api/songs/{SONG_ID}/sheet").json() == response.json()
+
+    def test_sync_records_the_sheet_stage_as_done(self, client):
+        # The library shows a pill per stage; a sheet built by sync is as done
+        # as one built by a pipeline run.
+        assert client.post(f"/api/songs/{SONG_ID}/sync").status_code == 200
+        stages = client.get(f"/api/songs/{SONG_ID}").json()["stages"]
+        assert stages["sheet"] == "done"
+
+    def test_sync_without_chords_is_an_error_not_a_crash(self, client, app_and_library):
+        _app, library, _project = app_and_library
+        SongProject.create(library, "bare-song")
+        assert client.post("/api/songs/bare-song/sync").status_code == 400

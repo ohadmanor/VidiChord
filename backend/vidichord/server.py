@@ -30,7 +30,7 @@ from .chords.fusion import FusionConfig
 from .config import PORT, Settings, frontend_dir
 from .jobs import JobManager
 from .models import ChordsDoc, LyricsDoc, SheetDoc, SourceDoc
-from .pipeline import StageContext
+from .pipeline import StageContext, run_stage
 from .pipeline import stage1_audio
 from .project import SongProject, summarise
 from .sheet import export
@@ -46,6 +46,11 @@ _ALLOWED_ORIGINS = [
 _RANGE = re.compile(r"bytes=(\d*)-(\d*)")
 _CHUNK = 1 << 18
 
+#: Where a reviewed run stops. Stage 4 lays the sheet out from the lyrics and
+#: the chords, so running it before either has been corrected wastes the work -
+#: the sheet is built on demand instead, by ``POST /api/songs/{id}/sync``.
+REVIEW_FINAL_STAGE = 3
+
 
 # ---------------------------------------------------------------------------
 # Request bodies
@@ -58,6 +63,9 @@ class CreateSongRequest(BaseModel):
     language: str | None = None
     fusion: FusionConfig | None = None
     cleanup: CleanupConfig | None = None
+    #: Stop after the chords so the lyrics and chords can be corrected before
+    #: the sheet is laid out from them. See :data:`REVIEW_FINAL_STAGE`.
+    review: bool = False
 
 
 class LyricsChoiceRequest(BaseModel):
@@ -67,6 +75,7 @@ class LyricsChoiceRequest(BaseModel):
     language: str | None = None
     fusion: FusionConfig | None = None
     cleanup: CleanupConfig | None = None
+    review: bool = False
 
 
 class RerunRequest(BaseModel):
@@ -77,6 +86,7 @@ class RerunRequest(BaseModel):
     force: bool = False
     #: Continue through the later stages after this one.
     cascade: bool = True
+    review: bool = False
 
 
 class SettingsRequest(BaseModel):
@@ -121,6 +131,15 @@ def create_app() -> FastAPI:
 
         return build
 
+    def _final_stage(review: bool) -> int:
+        """Last stage a run should reach.
+
+        A reviewed run stops with the lyrics and chords on screen and lays the
+        sheet out only once the user has corrected them and pressed sync, so
+        stage 4 is not part of the run.
+        """
+        return REVIEW_FINAL_STAGE if review else 4
+
     def pipeline_params(request: Any) -> dict:
         """Collect the stage parameters carried on a request body."""
         params: dict = {}
@@ -155,7 +174,9 @@ def create_app() -> FastAPI:
 
         params = pipeline_params(request)
         job = jobs().submit(
-            project.song_id, (1, 2, 3, 4), make_context_builder(project, params)
+            project.song_id,
+            tuple(range(1, _final_stage(request.review) + 1)),
+            make_context_builder(project, params),
         )
         return {"song_id": project.song_id, "job": job.snapshot()}
 
@@ -196,11 +217,17 @@ def create_app() -> FastAPI:
         return _read_artifact(open_project(song_id), LyricsDoc)
 
     @app.put("/api/songs/{song_id}/lyrics")
-    def put_lyrics(song_id: str, document: LyricsDoc) -> dict:
-        """Save edited lyrics and rebuild the sheet from them."""
+    def put_lyrics(song_id: str, document: LyricsDoc, rebuild: bool = True) -> dict:
+        """Save edited lyrics, rebuilding the sheet from them unless told not to.
+
+        The review editor passes ``rebuild=false``: it saves the lyrics and the
+        chords one after the other and lays the sheet out once, rather than
+        twice off half-corrected input.
+        """
         project = open_project(song_id)
         project.write(document)
-        _rebuild_sheet(project)
+        if rebuild:
+            _rebuild_sheet(project)
         return {"status": "ok"}
 
     @app.get("/api/songs/{song_id}/chords")
@@ -208,11 +235,15 @@ def create_app() -> FastAPI:
         return _read_artifact(open_project(song_id), ChordsDoc)
 
     @app.put("/api/songs/{song_id}/chords")
-    def put_chords(song_id: str, document: ChordsDoc) -> dict:
-        """Save edited chords and rebuild the sheet from them."""
+    def put_chords(song_id: str, document: ChordsDoc, rebuild: bool = True) -> dict:
+        """Save edited chords, rebuilding the sheet unless told not to.
+
+        See :func:`put_lyrics` for why the review editor suppresses the rebuild.
+        """
         project = open_project(song_id)
         project.write(document)
-        _rebuild_sheet(project)
+        if rebuild:
+            _rebuild_sheet(project)
         return {"status": "ok"}
 
     @app.get("/api/songs/{song_id}/sheet")
@@ -227,12 +258,28 @@ def create_app() -> FastAPI:
         project.write_sheet_text(export.render_text(document))
         return {"status": "ok"}
 
-    def _rebuild_sheet(project: SongProject) -> None:
-        from .pipeline import stage4_sheet
+    @app.post("/api/songs/{song_id}/sync")
+    def sync_sheet(song_id: str) -> SheetDoc:
+        """Lay the sheet out from the lyrics and chords as they stand.
 
+        The end of the review step: stage 4 is cheap next to transcription and
+        chord extraction, so it runs inline and the finished sheet comes back
+        on this response rather than through a job.
+        """
+        project = open_project(song_id)
+        _rebuild_sheet(project)
+        return _read_artifact(project, SheetDoc)
+
+    def _rebuild_sheet(project: SongProject) -> None:
+        """Run stage 4 over the artifacts as they stand.
+
+        Goes through ``run_stage`` rather than calling the stage directly so
+        the manifest records the result: the library shows a pill per stage,
+        and a sheet built here is as done as one built by a pipeline run.
+        """
         context = StageContext(project=project, settings=settings())
         try:
-            stage4_sheet.run(context)
+            run_stage(4, context)
         except Exception as error:
             raise HTTPException(status_code=400, detail=f"Could not rebuild sheet: {error}")
 
@@ -244,7 +291,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Stage must be 1-4")
 
         project = open_project(song_id)
-        stages = tuple(range(number, 5)) if request.cascade else (number,)
+        if request.cascade:
+            # A reviewed re-run stops short of the sheet, but never short of
+            # the stage that was actually asked for.
+            last = max(number, _final_stage(request.review))
+            stages = tuple(range(number, last + 1))
+        else:
+            stages = (number,)
         job = jobs().submit(
             song_id, stages, make_context_builder(project, pipeline_params(request))
         )
@@ -263,7 +316,11 @@ def create_app() -> FastAPI:
         params["choice"] = request.choice
         params["lyrics"] = request.lyrics
 
-        job = jobs().submit(song_id, (2, 3, 4), make_context_builder(project, params))
+        job = jobs().submit(
+            song_id,
+            tuple(range(2, _final_stage(request.review) + 1)),
+            make_context_builder(project, params),
+        )
         return job.snapshot()
 
     # -- jobs --------------------------------------------------------------

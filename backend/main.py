@@ -23,6 +23,17 @@ def _configure_console() -> None:
                 pass
 
 
+def _configure_hf() -> None:
+    """Quiet huggingface_hub's symlink warning before it imports.
+
+    Model downloads land in the HF cache, which symlinks blobs into snapshot
+    directories. Windows only allows that under Developer Mode or as admin, so
+    the cache falls back to copying. That costs disk but works, and the warning
+    only alarms users. Set the variable yourself to keep the warning.
+    """
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+
 def _configure_path() -> None:
     """Put the bundled ffmpeg on PATH, and warn if Node.js is missing.
 
@@ -53,6 +64,7 @@ def _open_browser(url: str) -> None:
 
 def main() -> None:
     _configure_console()
+    _configure_hf()
 
     # The package lives beside this file when running from source.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

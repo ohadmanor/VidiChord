@@ -159,7 +159,7 @@
     <div class="glass-panel centred" *ngIf="isRunning && !showChoiceModal">
       <div class="progress-title">
         <svg lucideRefreshCw class="animate-spin"></svg>
-        Stage {{ job?.stage }} of 4 &mdash; {{ job?.stage_label }}
+        Stage {{ job?.stage }} &mdash; {{ job?.stage_label }}
       </div>
       <div class="progress-message">{{ job?.message }}</div>
       <div class="progress-track">
@@ -176,71 +176,86 @@
 
     <!-- ======================= Workspace ======================= -->
     <div class="workspace" *ngIf="songId && !isRunning && !showChoiceModal && !showLibrary">
-      <!-- Metadata -->
-      <div class="metadata-bar" *ngIf="sheet">
-        <span class="song-title">{{ sheet.title || songId }}</span>
-        <span class="song-artist" *ngIf="sheet.artist">{{ sheet.artist }}</span>
+      <!-- Metadata. The sheet does not exist until the first sync, so the
+           lyrics carry the title and artist until then. -->
+      <div class="metadata-bar" *ngIf="sheet || lyrics">
+        <span class="song-title">{{ displayTitle }}</span>
+        <span class="song-artist" *ngIf="displayArtist">{{ displayArtist }}</span>
         <span class="spacer"></span>
         <span class="chip" *ngIf="lyrics">{{ lyrics.language }} &middot; {{ lyrics.source }}</span>
-        <button class="btn btn-secondary" (click)="rerun(2)" title="Re-run lyrics, chords and sheet">
-          Re-run lyrics
-        </button>
-        <button class="btn btn-secondary" (click)="rerun(3)" title="Re-run chords and sheet with the current tuning">
-          Re-run chords
+        <button class="btn btn-secondary" *ngIf="view === 'sheet'" (click)="backToReview()">
+          Back to editing
         </button>
       </div>
 
-      <!-- Lyrics -->
-      <details class="glass-panel panel" open>
-        <summary>
-          <svg lucideFileText></svg>
-          <span>Lyrics</span>
-          <span class="summary-meta" *ngIf="lyrics">
-            {{ lyrics.lines.length }} lines &middot; {{ lyrics.sections.length }} sections
+      <!-- ============ Review: lyrics beside chords, then sync ============ -->
+      <div class="review" *ngIf="view === 'review'">
+        <div class="review-panes">
+          <section class="glass-panel pane">
+            <header class="pane-header">
+              <svg lucideFileText></svg>
+              <h3>Lyrics</h3>
+              <span class="summary-meta" *ngIf="lyrics">
+                {{ lyrics.lines.length }} lines &middot; {{ lyrics.sections.length }} sections
+              </span>
+            </header>
+            <div class="pane-body">
+              <textarea
+                class="lyrics-editor"
+                [(ngModel)]="lyricsText"
+                (ngModelChange)="dirty = true"
+                [attr.dir]="lyricsDir"
+                placeholder="Lyrics will appear here..."
+              ></textarea>
+              <p class="muted small">Fix the words, or rename a [Section].</p>
+            </div>
+          </section>
+
+          <section class="glass-panel pane">
+            <header class="pane-header">
+              <svg lucideLayers></svg>
+              <h3>Chords</h3>
+              <span class="summary-meta" *ngIf="chords">
+                {{ chords.bars.length }} bars &middot; {{ chords.bpm }} bpm
+                <ng-container *ngIf="chords.key">&middot; {{ chords.key }}</ng-container>
+              </span>
+            </header>
+            <div class="pane-body">
+              <app-chord-grid
+                [chords]="chords"
+                [currentTime]="audioService.currentTime()"
+                (chordsChanged)="onChordsChanged($event)"
+                (seek)="handleSeek($event)"
+              ></app-chord-grid>
+            </div>
+          </section>
+        </div>
+
+        <div class="glass-panel review-actions">
+          <span class="muted small" *ngIf="dirty">Edited &mdash; sync to apply.</span>
+          <span class="muted small" *ngIf="!dirty">
+            Correct anything wrong on either side, then sync to build the sheet.
           </span>
-        </summary>
-        <div class="panel-body">
-          <textarea
-            class="lyrics-editor"
-            [(ngModel)]="lyricsText"
-            [attr.dir]="lyrics?.language === 'he' ? 'rtl' : 'ltr'"
-            placeholder="Lyrics will appear here..."
-          ></textarea>
-          <div class="panel-actions">
-            <span class="muted small">
-              Edit the words or the [Section] tags, then save to rebuild the sheet.
-            </span>
-            <button class="btn btn-primary" (click)="saveLyrics()" [disabled]="busy || !lyrics">
-              Save &amp; rebuild
-            </button>
-          </div>
+          <span class="spacer"></span>
+          <button class="btn btn-secondary" (click)="rerun(2)" title="Transcribe and look up the lyrics again">
+            Re-run lyrics
+          </button>
+          <button class="btn btn-secondary" (click)="rerun(3)" title="Extract the chords again with the current tuning">
+            Re-run chords
+          </button>
+          <button class="btn btn-primary" (click)="sync()" [disabled]="syncing || !lyrics || !chords">
+            {{ syncing ? 'Syncing...' : 'Sync' }}
+          </button>
         </div>
-      </details>
+      </div>
 
-      <!-- Chords -->
-      <details class="glass-panel panel" open>
-        <summary>
-          <svg lucideLayers></svg>
-          <span>Chords</span>
-          <span class="summary-meta" *ngIf="chords">{{ chords.bars.length }} bars</span>
-        </summary>
-        <div class="panel-body">
-          <app-chord-grid
-            [chords]="chords"
-            [currentTime]="audioService.currentTime()"
-            (chordsChanged)="onChordsChanged($event)"
-            (seek)="handleSeek($event)"
-          ></app-chord-grid>
-        </div>
-      </details>
-
-      <!-- Sheet -->
-      <details class="glass-panel panel sheet-panel" open>
-        <summary>
+      <!-- ======================= Sheet ======================= -->
+      <div class="glass-panel panel sheet-panel" *ngIf="view === 'sheet'">
+        <header class="pane-header">
           <svg lucideMusic></svg>
-          <span>Song sheet</span>
+          <h3>Song sheet</h3>
           <span class="summary-meta" *ngIf="sheet">{{ sheet.blocks.length }} blocks</span>
-        </summary>
+        </header>
         <div class="panel-body">
           <div class="panel-actions top">
             <div class="mode-toggle">
@@ -260,7 +275,7 @@
             (seek)="handleSeek($event)"
           ></app-sheet-view>
         </div>
-      </details>
+      </div>
     </div>
   </main>
 

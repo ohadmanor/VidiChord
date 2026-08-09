@@ -1,7 +1,47 @@
+/*
+ * Laid out to match the songbook project, which is where these sheets end up:
+ * a centred column, a dashed title block, uppercase accent section headers,
+ * and paragraph-sized gaps between verses. The chord and lyric rows are the
+ * one deliberate departure - see the note above .chord-row.
+ */
 .sheet {
-  font-family: var(--font-mono);
+  max-width: 800px;
+  margin: 0 auto;
   line-height: 1.35;
   padding: 4px 2px;
+}
+
+.sheet.rtl {
+  direction: rtl;
+  text-align: right;
+}
+
+/* --- title block --- */
+
+.song-header {
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px dashed var(--border-color);
+}
+
+.song-header h1 {
+  font-family: var(--font-display, 'Outfit', sans-serif);
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--text-main);
+  margin: 0 0 0.4rem;
+}
+
+/* Outfit carries no Hebrew, so a Hebrew title would fall back mid-heading. */
+.sheet.rtl .song-header h1 {
+  font-family: var(--font-sans, 'Inter', sans-serif);
+}
+
+.song-byline {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.95rem;
+  color: var(--text-muted);
 }
 
 .block {
@@ -26,8 +66,9 @@
 
 /* --- section headings --- */
 
+/* songbook spaces verses by the header above them rather than by a rule. */
 .block-section {
-  margin-top: 14px;
+  margin-top: 1.5rem;
 }
 
 .block-section:first-child {
@@ -35,15 +76,17 @@
 }
 
 .section-name {
-  font-family: var(--font-display, inherit);
-  font-size: 0.75rem;
+  font-family: var(--font-display, 'Outfit', sans-serif);
+  font-size: 1em;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--primary);
-  padding: 2px 0;
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 6px;
+  margin-bottom: 0.8rem;
+}
+
+.sheet.rtl .section-name {
+  font-family: var(--font-sans, 'Inter', sans-serif);
 }
 
 .section-name[data-kind='chorus'] {
@@ -68,29 +111,65 @@
   outline: none;
 }
 
+/* The bar chart reads left to right whatever the song does, but it belongs on
+   the same side of the page as the words around it. */
+.sheet.rtl .instrumental {
+  text-align: right;
+}
+
 /* --- lyric lines --- */
 
 /*
- * Both rows are monospace and preserve whitespace exactly. The chord row is
- * positioned purely by the spaces the backend put in it, so any change to
- * font or white-space handling here will pull chords off their syllables.
+ * A chord sits over its syllable purely because of the spaces the backend put
+ * in the chord row, so the two rows have to measure identically: same family,
+ * same size, whitespace preserved, and no wrapping. Changing any of those
+ * pulls every chord off its word.
  */
-.chord-row {
-  color: var(--secondary);
-  font-weight: 700;
-  font-size: 0.92rem;
-  line-height: 1.1;
+.chord-row,
+.lyric-row {
+  /* Not --font-mono. A chord row is Latin and a Hebrew lyric row is not, so
+     the font has to hold both scripts on one grid: whatever it lacks, the
+     browser substitutes per-script, and a Hebrew glyph 28% narrower than the
+     Latin space above it walks every chord off its word by the end of the
+     line. Courier New is metric-identical across both; Liberation Mono and
+     DejaVu Sans Mono are the equivalents where it is absent. */
+  font-family: 'Courier New', 'Liberation Mono', 'DejaVu Sans Mono', monospace;
+  font-size: 1rem;
   white-space: pre;
-  min-height: 1.1em;
-  overflow-x: auto;
+  /* Each row keeps its own base direction - chord names read left to right
+     whatever the song does - while sharing the edge they are measured from. */
+  unicode-bidi: plaintext;
   outline: none;
+}
+
+/*
+ * The edge that matters. A right-to-left lyric row starts at the right, and
+ * the backend mirrors the chord columns to match, which only lines up if the
+ * chord row is anchored to that same edge. Anchoring one row left and the
+ * other right leaves the chords stranded at the far side of the sheet.
+ */
+.sheet.rtl .chord-row,
+.sheet.rtl .lyric-row {
+  text-align: right;
+}
+
+.chord-row {
+  color: var(--chord-color, var(--secondary));
+  font-weight: 700;
+  line-height: 1.1;
+  min-height: 1.1em;
 }
 
 .lyric-row {
   color: var(--text-main);
-  font-size: 1.02rem;
-  white-space: pre-wrap;
-  outline: none;
+}
+
+/* songbook's spacing between one chord-and-lyric pair and the next. Long
+   lines scroll as a unit; a scrollbox per row would slide the chords out of
+   step with the words underneath them. */
+.block-lyric {
+  margin-bottom: 0.8rem;
+  overflow-x: auto;
 }
 
 [contenteditable='plaintext-only']:focus {

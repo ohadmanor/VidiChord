@@ -501,38 +501,26 @@ textarea:focus {
   font-size: 0.75rem;
 }
 
-/* Panels are <details>, so each section can be collapsed out of the way. */
 .panel {
   height: auto;
   padding: 14px 18px;
 }
 
-.panel > summary {
+.pane-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
   font-weight: 600;
   font-size: 0.95rem;
-  list-style: none;
-  user-select: none;
 }
 
-.panel > summary::-webkit-details-marker {
-  display: none;
+.pane-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
-.panel > summary::before {
-  content: '▸';
-  color: var(--text-muted);
-  transition: transform 0.15s ease;
-}
-
-.panel[open] > summary::before {
-  transform: rotate(90deg);
-}
-
-.panel > summary svg {
+.pane-header svg {
   width: 17px;
   height: 17px;
   color: var(--primary);
@@ -549,10 +537,82 @@ textarea:focus {
   padding-top: 12px;
 }
 
+/* ---------------------------------------------------------------- review */
+
+/* The review step: lyrics and chords side by side, corrected together, with
+   sync at the bottom. Both panes scroll independently so a long song does not
+   push the sync button off screen. */
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.review-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px 18px;
+}
+
+.pane-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding-top: 12px;
+  gap: 8px;
+}
+
+/* The chord grid is the tall one; cap both panes at the same height so the
+   two sides stay level however many bars the song has. */
+.pane-body > app-chord-grid {
+  flex: 1;
+  min-height: 0;
+  max-height: 58vh;
+  overflow-y: auto;
+}
+
+/* .glass-panel is a full-height column; this one is a short toolbar row. */
+.review-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  height: auto;
+  gap: 12px;
+  padding: 10px 16px;
+  flex-wrap: wrap;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
+/* Sync is the one action that commits the review, so it carries more weight
+   than the re-run buttons beside it. */
+.review-actions .btn-primary {
+  min-width: 120px;
+  font-weight: 600;
+}
+
+/* One column when there is not room for two side by side. */
+@media (max-width: 1100px) {
+  .review-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .lyrics-editor {
   width: 100%;
-  min-height: 220px;
-  max-height: 420px;
+  flex: 1;
+  min-height: 58vh;
   font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.6;

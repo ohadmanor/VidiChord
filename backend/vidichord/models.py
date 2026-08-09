@@ -216,13 +216,6 @@ class ChordsDoc(Artifact):
 # ---------------------------------------------------------------------------
 
 
-class SectionBlock(Artifact):
-    type: Literal["section"] = "section"
-    name: str
-    kind: SectionKind = SectionKind.OTHER
-    start: float = 0.0
-
-
 class InstrumentalBlock(Artifact):
     """A run of bars with no singing, rendered as ``// C / G / Am F //``."""
 
@@ -232,6 +225,9 @@ class InstrumentalBlock(Artifact):
     start: float
     end: float
     bar_indices: list[int] = Field(default_factory=list)
+    #: First block of a new section. The sheet prints no section names, so this
+    #: is what puts a paragraph break where a heading would otherwise go.
+    starts_section: bool = False
 
 
 class LyricBlock(Artifact):
@@ -245,10 +241,12 @@ class LyricBlock(Artifact):
     end: float
     #: Index into ``LyricsDoc.lines``, so edits can be written back.
     line_index: int
+    #: See :attr:`InstrumentalBlock.starts_section`.
+    starts_section: bool = False
 
 
 SheetBlock = Annotated[
-    SectionBlock | InstrumentalBlock | LyricBlock,
+    InstrumentalBlock | LyricBlock,
     Field(discriminator="type"),
 ]
 

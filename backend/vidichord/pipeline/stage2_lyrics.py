@@ -18,6 +18,7 @@ after an automatic lookup fails does not re-run the slowest step.
 from __future__ import annotations
 
 import json
+import re
 
 from ..lyrics import align as align_mod
 from ..lyrics import providers, structure
@@ -28,6 +29,14 @@ from . import NeedsUserInput, StageContext
 
 #: Cache of the Whisper transcript, so a re-run need not transcribe again.
 TRANSCRIPT_FILENAME = "02_transcript.json"
+
+#: Bracketed parts of a video title, which describe the upload and not the
+#: song. See :func:`_title_variants`.
+_TITLE_NOISE = re.compile(r"[(\[][^)\]]*[)\]]")
+
+#: A trailing annotation after a vertical bar - "| Official Video",
+#: "| הקליפ הרשמי". The song's name is whatever precedes it.
+_TITLE_TAIL = re.compile(r"\s*\|.*$")
 
 #: Vocabulary overlap required before a search hit is accepted.
 _MIN_OVERLAP_FILENAME = 0.30
@@ -132,6 +141,23 @@ def _snippets(segments: list[dict]) -> list[str]:
     return candidates
 
 
+def _title_variants(title: str) -> list[str]:
+    """Search forms of a video title, most specific first.
+
+    An uploader's additions - "(Official Video)", "[HD]", "| הקליפ הרשמי", the
+    name of the project a recording came from - describe the upload rather
+    than the song, and no lyrics database is indexed under them. Searching
+    them away as well is often the difference between one hit and none.
+    """
+    variants: list[str] = []
+    for candidate in (title, _TITLE_TAIL.sub("", title)):
+        for form in (candidate, _TITLE_NOISE.sub(" ", candidate)):
+            cleaned = " ".join(form.split())
+            if cleaned and cleaned not in variants:
+                variants.append(cleaned)
+    return variants
+
+
 def _lookup(
     context: StageContext, segments: list[dict], source: SourceDoc
 ) -> providers.LyricsMatch | None:
@@ -139,12 +165,18 @@ def _lookup(
     transcript_text = " ".join(str(s.get("text", "")) for s in segments)
 
     # 1. The title and artist we already know from the video metadata.
-    if source.title:
-        query = f"{source.title} {source.artist}".strip()
+    for title in _title_variants(source.title) if source.title else []:
+        query = f"{title} {source.artist}".strip()
         context.report(f"Searching LRClib for '{query}'...", None)
         match = providers.fetch_lrclib(query)
         if match is None and source.artist and source.artist != "Unknown":
-            match = providers.fetch_lrclib(source.title, expected_artist=source.artist)
+            match = providers.fetch_lrclib(title, expected_artist=source.artist)
+        if match is None:
+            # A database may hold only another artist's recording of the same
+            # song, whose words are still the right ones - so the artist is
+            # not required here. Overlap with the transcript is what decides
+            # whether this is the same song at all.
+            match = providers.fetch_lrclib(title)
         if match is not None:
             overlap = providers.check_overlap(transcript_text, match.lyrics)
             if overlap >= _MIN_OVERLAP_FILENAME or not transcript_text.strip():
@@ -353,8 +385,13 @@ def run(context: StageContext) -> None:
             official = match.lyrics
             lrc = match.synced_lyrics
             lyrics_source = match.source
+            # The provider's title is the song's, without whatever the
+            # uploader added to name their own video - so it is the better of
+            # the two. Its artist is not: the words may have come from another
+            # artist's recording of the same song, while the performance being
+            # transcribed is the one in the video.
             title = match.title or title
-            artist = match.artist or artist
+            artist = artist if artist and artist != "Unknown" else match.artist
         else:
             raise NeedsUserInput(
                 "No lyrics found for this song. Transcribe with Whisper alone, "

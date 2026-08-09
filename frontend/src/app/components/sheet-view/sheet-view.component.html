@@ -1,4 +1,13 @@
 <div class="sheet" [class.rtl]="isRtl()">
+  <!-- Title block, as songbook prints it: name, artist, then a dashed rule. -->
+  <header class="song-header" *ngIf="hasHeading()">
+    <h1>{{ title() }}</h1>
+    <div class="song-byline">
+      <span>{{ artist() }}</span>
+      <span *ngIf="key()">{{ key() }}</span>
+    </div>
+  </header>
+
   <div
     *ngFor="let block of blocks(); let i = index; trackBy: trackByIndex"
     class="block"
@@ -29,7 +38,8 @@
       <!--
         The chord row keeps dir="ltr" whatever the song's direction: its
         alignment lives in the spacing the backend generated, and letting the
-        browser reorder it would destroy that.
+        browser reorder it would destroy that. Which edge it is measured from
+        is a matter of alignment, not direction, and belongs in the stylesheet.
       -->
       <div
         class="chord-row"

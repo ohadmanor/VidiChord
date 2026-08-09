@@ -78,10 +78,20 @@ export class ApiService {
     });
   }
 
-  /** Start a run from a YouTube URL. Returns the new song and its job. */
+  /**
+   * Start a run from a YouTube URL. Returns the new song and its job.
+   *
+   * With `review`, the run stops once the chords are in, leaving the sheet to
+   * be built by {@link syncSheet} after the results have been corrected.
+   */
   createFromYoutube(
     url: string,
-    options: { language?: string | null; fusion?: FusionConfig; cleanup?: CleanupConfig } = {}
+    options: {
+      language?: string | null;
+      fusion?: FusionConfig;
+      cleanup?: CleanupConfig;
+      review?: boolean;
+    } = {}
   ): Promise<{ song_id: string; job: Job }> {
     return this.request('/api/songs', {
       method: 'POST',
@@ -99,23 +109,44 @@ export class ApiService {
     return this.request(`/api/songs/${encodeURIComponent(songId)}/lyrics`);
   }
 
-  /** Save edited lyrics. The backend rebuilds the sheet from them. */
-  putLyrics(songId: string, document: LyricsDoc): Promise<{ status: string }> {
-    return this.request(`/api/songs/${encodeURIComponent(songId)}/lyrics`, {
-      method: 'PUT',
-      body: JSON.stringify(document),
-    });
+  /**
+   * Save edited lyrics.
+   *
+   * The backend rebuilds the sheet from them unless `rebuild` is false, which
+   * is what the review editor wants: it saves lyrics and chords together and
+   * lays the sheet out once, on sync.
+   */
+  putLyrics(
+    songId: string,
+    document: LyricsDoc,
+    rebuild = true
+  ): Promise<{ status: string }> {
+    return this.request(
+      `/api/songs/${encodeURIComponent(songId)}/lyrics?rebuild=${rebuild}`,
+      { method: 'PUT', body: JSON.stringify(document) }
+    );
   }
 
   getChords(songId: string): Promise<ChordsDoc> {
     return this.request(`/api/songs/${encodeURIComponent(songId)}/chords`);
   }
 
-  /** Save edited chords. The backend rebuilds the sheet from them. */
-  putChords(songId: string, document: ChordsDoc): Promise<{ status: string }> {
-    return this.request(`/api/songs/${encodeURIComponent(songId)}/chords`, {
-      method: 'PUT',
-      body: JSON.stringify(document),
+  /** Save edited chords. See {@link putLyrics} for `rebuild`. */
+  putChords(
+    songId: string,
+    document: ChordsDoc,
+    rebuild = true
+  ): Promise<{ status: string }> {
+    return this.request(
+      `/api/songs/${encodeURIComponent(songId)}/chords?rebuild=${rebuild}`,
+      { method: 'PUT', body: JSON.stringify(document) }
+    );
+  }
+
+  /** Lay the sheet out from the saved lyrics and chords, and return it. */
+  syncSheet(songId: string): Promise<SheetDoc> {
+    return this.request(`/api/songs/${encodeURIComponent(songId)}/sync`, {
+      method: 'POST',
     });
   }
 
@@ -144,6 +175,7 @@ export class ApiService {
       retranscribe?: boolean;
       force?: boolean;
       cascade?: boolean;
+      review?: boolean;
     } = {}
   ): Promise<Job> {
     return this.request(
@@ -156,7 +188,12 @@ export class ApiService {
   submitLyricsChoice(
     songId: string,
     choice: 'ai' | 'manual',
-    options: { lyrics?: string; language?: string | null; fusion?: FusionConfig } = {}
+    options: {
+      lyrics?: string;
+      language?: string | null;
+      fusion?: FusionConfig;
+      review?: boolean;
+    } = {}
   ): Promise<Job> {
     return this.request(`/api/songs/${encodeURIComponent(songId)}/lyrics/choice`, {
       method: 'POST',

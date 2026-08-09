@@ -10,6 +10,7 @@ is ever run over the full audio.
 from __future__ import annotations
 
 import os
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -23,6 +24,13 @@ DEFAULT_MODEL = "large-v3"
 
 #: Seconds of audio to inspect when detecting the language.
 DETECTION_WINDOW = 30.0
+
+#: Where those windows start, in seconds. Songs open with an instrumental
+#: intro often enough that reading only the first window is a coin flip: on a
+#: Hebrew test track it scored Hebrew at 0.17, barely ahead of Greek at 0.16,
+#: and the loser won often enough to send the whole song to the wrong model.
+#: Sampling across the track finds the singing wherever it starts.
+DETECTION_OFFSETS = (0.0, 30.0, 60.0, 90.0, 120.0)
 
 #: Whisper's fixed input rate.
 _SAMPLE_RATE = 16000
@@ -96,10 +104,16 @@ class WhisperEngine:
         return model
 
     def detect_language(self, audio_path: str) -> str:
-        """Identify the sung language from the opening of the track.
+        """Identify the sung language by sampling across the track.
 
-        Runs on a small model over a short window, so it costs seconds rather
+        Runs on a small model over short windows, so it costs seconds rather
         than the minutes a full transcription takes.
+
+        Each window votes with its own confidence and the votes are summed, so
+        a language that scores moderately wherever there is singing beats one
+        that scores highly on a single unrepresentative window. On the Hebrew
+        test track that is the difference between Hebrew (0.17 + 0.68 + 0.50)
+        and the Arabic its instrumental passage reads as (0.76).
         """
         model = self._load(DETECTION_MODEL)
 
@@ -107,14 +121,30 @@ class WhisperEngine:
             from faster_whisper.audio import decode_audio
 
             waveform = decode_audio(audio_path, sampling_rate=_SAMPLE_RATE)
-            window = waveform[: int(DETECTION_WINDOW * _SAMPLE_RATE)]
-            language, _probability, *_ = model.detect_language(window)
-            return language
+            span = int(DETECTION_WINDOW * _SAMPLE_RATE)
+
+            scores: dict[str, float] = {}
+            for offset in DETECTION_OFFSETS:
+                window = waveform[int(offset * _SAMPLE_RATE):][:span]
+                # A part-window at the end of a short track still carries a
+                # usable reading; a sliver does not.
+                if len(window) < span // 2:
+                    break
+                language, probability, *_ = model.detect_language(window)
+                scores[language] = scores.get(language, 0.0) + probability
+
+            if scores:
+                return max(scores, key=lambda name: scores[name])
         except Exception:
-            # Signatures differ across faster-whisper releases; fall back to
-            # transcribing a short window and reading the reported language.
-            _segments, info = model.transcribe(audio_path, without_timestamps=True)
-            return info.language
+            # Signatures differ across faster-whisper releases. Say so rather
+            # than failing over in silence: the fallback reads the language off
+            # a whole-file pass by the detection model, which is a weaker
+            # signal, and a wrong answer here costs a full transcription by the
+            # wrong model.
+            traceback.print_exc()
+
+        _segments, info = model.transcribe(audio_path, without_timestamps=True)
+        return info.language
 
     def transcribe(
         self,

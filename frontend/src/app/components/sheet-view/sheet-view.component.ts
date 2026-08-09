@@ -57,6 +57,14 @@ export class SheetViewComponent {
   readonly blocks = computed(() => this._sheet()?.blocks ?? []);
   readonly isRtl = computed(() => this._sheet()?.is_rtl ?? false);
 
+  // The heading songbook prints above every sheet: title, artist, and the key
+  // it is in. Computed rather than read through `?.` chains in the template,
+  // which Angular 18 miscompiles into an undeclared temporary.
+  readonly title = computed(() => this._sheet()?.title ?? '');
+  readonly artist = computed(() => this._sheet()?.artist ?? '');
+  readonly key = computed(() => this._sheet()?.key ?? '');
+  readonly hasHeading = computed(() => !!(this.title() || this.artist()));
+
   /** Index of the block currently sounding, or -1. */
   readonly activeIndex = computed(() => {
     const time = this._currentTime();

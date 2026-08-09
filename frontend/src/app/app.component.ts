@@ -90,9 +90,20 @@ export class AppComponent implements OnInit, OnDestroy {
   selectedLanguage = 'auto';
 
   // --- editors -------------------------------------------------------------
+  /**
+   * Which half of the workflow is on screen.
+   *
+   * A run stops once the chords are in and lands on `review`, where the lyrics
+   * and the chords sit side by side and can be corrected. Sync lays out the
+   * sheet from them and moves to `sheet`.
+   */
+  view: 'review' | 'sheet' = 'review';
   sheetMode: 'view' | 'edit' = 'view';
   /** Plain-text mirror of the lyrics document, for bulk editing. */
   lyricsText = '';
+  /** Edits made in the review panes but not yet written to disk. */
+  dirty = false;
+  syncing = false;
   isExporting = false;
 
   // --- settings ------------------------------------------------------------
@@ -167,6 +178,26 @@ export class AppComponent implements OnInit, OnDestroy {
     return this.job?.state === 'queued' || this.job?.state === 'running';
   }
 
+  /**
+   * Title and artist for the header.
+   *
+   * The sheet does not exist until the first sync, so during review these come
+   * from the lyrics. Kept out of the template: chained `?.` reads in one
+   * expression hit an Angular 18 codegen bug that throws while rendering.
+   */
+  get displayTitle(): string {
+    return this.sheet?.title || this.lyrics?.title || this.songId;
+  }
+
+  get displayArtist(): string {
+    return this.sheet?.artist || this.lyrics?.artist || '';
+  }
+
+  /** Text direction for the lyrics editor. A getter for the same reason. */
+  get lyricsDir(): 'rtl' | 'ltr' {
+    return this.lyrics?.language === 'he' ? 'rtl' : 'ltr';
+  }
+
   get progressPercent(): number {
     return this.job?.percent ?? 0;
   }
@@ -187,6 +218,7 @@ export class AppComponent implements OnInit, OnDestroy {
         language: this.selectedLanguage === 'auto' ? null : this.selectedLanguage,
         fusion: this.fusion,
         cleanup: this.cleanup,
+        review: true,
       });
       this.songId = created.song_id;
       this.watch(created.job);
@@ -221,7 +253,10 @@ export class AppComponent implements OnInit, OnDestroy {
       return;
     }
     await this.loadSong(this.songId);
-    this.flash(`Finished: ${this.sheet?.title || this.songId}`);
+    // The run deliberately stopped before the sheet, so show the editor even
+    // when an earlier sheet is still on disk from a previous sync.
+    this.view = 'review';
+    this.flash('Lyrics and chords are ready to review.');
     await this.refreshLibrary();
   }
 
@@ -233,6 +268,7 @@ export class AppComponent implements OnInit, OnDestroy {
         lyrics: this.manualLyrics,
         language: this.selectedLanguage === 'auto' ? null : this.selectedLanguage,
         fusion: this.fusion,
+        review: true,
       });
       this.watch(job);
     } catch (err) {
@@ -249,6 +285,7 @@ export class AppComponent implements OnInit, OnDestroy {
         fusion: this.fusion,
         cleanup: this.cleanup,
         language: this.selectedLanguage === 'auto' ? null : this.selectedLanguage,
+        review: true,
       });
       this.watch(job);
     } catch (err) {
@@ -265,6 +302,8 @@ export class AppComponent implements OnInit, OnDestroy {
     this.sheet = null;
     this.lyricsText = '';
     this.job = null;
+    this.view = 'review';
+    this.dirty = false;
   }
 
   async loadSong(songId: string): Promise<void> {
@@ -282,6 +321,10 @@ export class AppComponent implements OnInit, OnDestroy {
       this.chords = chords;
       this.sheet = sheet;
       this.lyricsText = lyrics ? this.renderLyricsText(lyrics) : '';
+      this.dirty = false;
+      // A song that has already been synced opens on its sheet; one that has
+      // not opens where the work is left to do.
+      this.view = sheet ? 'sheet' : 'review';
       this.audioService.loadTrack(this.api.audioUrl(songId));
       this.showLibrary = false;
     } catch (err) {
@@ -329,25 +372,37 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Parse the editor's text back onto the lyrics document.
+   * Write both corrected artifacts, then lay the sheet out from them.
    *
-   * Only text and section names are editable here; timings stay attached to
-   * their lines. Lines added in the editor inherit the previous line's timing,
-   * which the backend then re-spreads when it rebuilds the sheet.
+   * This is the end of the review step. Lyrics and chords are saved with the
+   * rebuild suppressed so the sheet is generated once, from both, rather than
+   * twice - once off corrected lyrics and stale chords, then again.
    */
-  async saveLyrics(): Promise<void> {
-    if (!this.lyrics || !this.songId) return;
-    this.busy = true;
+  async sync(): Promise<void> {
+    if (!this.songId || this.syncing || !this.lyrics || !this.chords) return;
+    this.syncing = true;
+    this.error = '';
     try {
-      const updated = this.parseLyricsText(this.lyricsText, this.lyrics);
-      await this.api.putLyrics(this.songId, updated);
-      await this.loadSong(this.songId);
-      this.flash('Lyrics saved and the sheet rebuilt.');
+      const lyrics = this.parseLyricsText(this.lyricsText, this.lyrics);
+      await this.api.putLyrics(this.songId, lyrics, false);
+      await this.api.putChords(this.songId, this.chords, false);
+      this.lyrics = lyrics;
+
+      this.sheet = await this.api.syncSheet(this.songId);
+      this.dirty = false;
+      this.view = 'sheet';
+      this.flash('Song sheet generated.');
+      await this.refreshLibrary();
     } catch (err) {
       this.error = this.describe(err);
     } finally {
-      this.busy = false;
+      this.syncing = false;
     }
+  }
+
+  /** Go back to the editor without touching what is already on disk. */
+  backToReview(): void {
+    this.view = 'review';
   }
 
   private parseLyricsText(text: string, base: LyricsDoc): LyricsDoc {
@@ -399,15 +454,15 @@ export class AppComponent implements OnInit, OnDestroy {
 
   // --- chord editing -------------------------------------------------------
 
-  async onChordsChanged(document: ChordsDoc): Promise<void> {
-    if (!this.songId) return;
+  /**
+   * Hold a chord edit in memory.
+   *
+   * Corrections are not written as they are typed: the point of the review
+   * step is to fix everything first and generate the sheet once, on sync.
+   */
+  onChordsChanged(document: ChordsDoc): void {
     this.chords = document;
-    try {
-      await this.api.putChords(this.songId, document);
-      this.sheet = await this.api.getSheet(this.songId);
-    } catch (err) {
-      this.error = this.describe(err);
-    }
+    this.dirty = true;
   }
 
   // --- sheet editing -------------------------------------------------------
