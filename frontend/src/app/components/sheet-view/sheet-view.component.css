@@ -1,8 +1,8 @@
 /*
  * Laid out to match the songbook project, which is where these sheets end up:
- * a centred column, a dashed title block, uppercase accent section headers,
- * and paragraph-sized gaps between verses. The chord and lyric rows are the
- * one deliberate departure - see the note above .chord-row.
+ * a centred column, a dashed title block, and paragraph-sized gaps between
+ * verses. The chord and lyric rows are the one deliberate departure - see the
+ * note above .chord-row.
  */
 .sheet {
   max-width: 800px;
@@ -64,40 +64,17 @@
   box-shadow: inset -2px 0 0 var(--primary);
 }
 
-/* --- section headings --- */
+/* --- section breaks --- */
 
-/* songbook spaces verses by the header above them rather than by a rule. */
-.block-section {
-  margin-top: 1.5rem;
+/* Sections are not named on the sheet, so the gap is the only thing that says
+   one has ended. It has to be bigger than the gap between lyric lines, which
+   .block-lyric already spends 0.8rem on. */
+.block-break {
+  margin-top: 2rem;
 }
 
-.block-section:first-child {
+.block-break:first-child {
   margin-top: 0;
-}
-
-.section-name {
-  font-family: var(--font-display, 'Outfit', sans-serif);
-  font-size: 1em;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--primary);
-  margin-bottom: 0.8rem;
-}
-
-.sheet.rtl .section-name {
-  font-family: var(--font-sans, 'Inter', sans-serif);
-}
-
-.section-name[data-kind='chorus'] {
-  color: var(--chord-color, var(--secondary));
-}
-
-.section-name[data-kind='solo'],
-.section-name[data-kind='intro'],
-.section-name[data-kind='outro'],
-.section-name[data-kind='interlude'] {
-  color: var(--text-muted);
 }
 
 /* --- instrumental bar charts --- */

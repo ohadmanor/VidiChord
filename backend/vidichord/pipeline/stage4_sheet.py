@@ -92,11 +92,10 @@ def build(lyrics: LyricsDoc, chords: ChordsDoc) -> SheetDoc:
             if not (bar.start <= line.time < bar.end):
                 continue
 
-            if line.section_index is not None and line.section_index != open_section:
-                section = lyrics.sections[line.section_index]
-                sheet.blocks.append(
-                    SectionBlock(name=section.name, kind=section.kind, start=line.time)
-                )
+            starts_section = (
+                line.section_index is not None and line.section_index != open_section
+            )
+            if starts_section:
                 open_section = line.section_index
 
             sheet.blocks.append(
@@ -113,6 +112,7 @@ def build(lyrics: LyricsDoc, chords: ChordsDoc) -> SheetDoc:
                     start=line.time,
                     end=line.end,
                     line_index=line.index,
+                    starts_section=starts_section,
                 )
             )
 

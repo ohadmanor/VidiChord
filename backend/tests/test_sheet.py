@@ -16,7 +16,6 @@ from vidichord.models import (
     LyricsDoc,
     NO_CHORD,
     Section,
-    SectionBlock,
     SectionKind,
     Word,
 )
@@ -209,7 +208,7 @@ class TestChordLayout:
 
 
 class TestSheetBuild:
-    def test_interleaves_sections_lyrics_and_instrumentals(self):
+    def test_interleaves_lyrics_and_instrumentals(self):
         bars = [make_bar(i, (i - 1) * 2.0, ["C"] * 4) for i in range(1, 13)]
         lyrics = LyricsDoc(
             title="Test", artist="Someone", language="en",
@@ -229,9 +228,12 @@ class TestSheetBuild:
         assert sheet.title == "Test"
         assert not sheet.is_rtl
         assert any(isinstance(b, InstrumentalBlock) for b in sheet.blocks)
-        assert any(isinstance(b, SectionBlock) and b.name == "Verse 1" for b in sheet.blocks)
         lyric_blocks = [b for b in sheet.blocks if isinstance(b, LyricBlock)]
         assert [b.text for b in lyric_blocks] == ["first line", "second line"]
+        # The verse is never announced by name. Its first line carries the
+        # break away from the intro instead, and the second follows straight on.
+        assert [b.starts_section for b in lyric_blocks] == [True, False]
+        assert "Verse 1" not in export.render_text(sheet)
 
     def test_every_lyric_line_appears_even_without_chords(self):
         from vidichord.models import ChordsDoc
@@ -294,21 +296,35 @@ class TestExport:
         sheet = SheetDoc(
             title="Song", artist="Artist",
             blocks=[
-                SectionBlock(name="Intro", kind=SectionKind.INTRO),
                 InstrumentalBlock(kind=SectionKind.INTRO, text="// C / G //",
-                                  start=0.0, end=4.0),
-                SectionBlock(name="Verse 1", kind=SectionKind.VERSE),
+                                  start=0.0, end=4.0, starts_section=True),
                 LyricBlock(chord_line="C    G", text="hello there",
-                           start=4.0, end=6.0, line_index=0),
+                           start=4.0, end=6.0, line_index=0, starts_section=True),
+                LyricBlock(chord_line="Am   F", text="and again",
+                           start=6.0, end=8.0, line_index=1),
             ],
         )
         text = export.render_text(sheet)
-        assert "[Intro]" in text
         assert "// C / G //" in text
-        assert "[Verse 1]" in text
-        # The chord row must come immediately before its lyric line.
-        lines = text.splitlines()
-        assert lines[lines.index("hello there") - 1] == "C    G"
+        # Sections are unnamed, so a blank line is what separates them - and
+        # lines within a section run on with none.
+        assert text.splitlines() == [
+            "// C / G //",
+            "",
+            "C    G",
+            "hello there",
+            "Am   F",
+            "and again",
+        ]
+
+    def test_no_leading_blank_line_before_the_first_section(self):
+        from vidichord.models import SheetDoc
+
+        sheet = SheetDoc(blocks=[
+            LyricBlock(chord_line="", text="first of all",
+                       start=0.0, end=1.0, line_index=0, starts_section=True)
+        ])
+        assert export.render_text(sheet) == "first of all\n"
 
     def test_blank_chord_rows_are_dropped(self):
         from vidichord.models import SheetDoc

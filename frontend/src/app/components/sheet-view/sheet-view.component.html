@@ -12,16 +12,11 @@
     *ngFor="let block of blocks(); let i = index; trackBy: trackByIndex"
     class="block"
     [class.active]="i === activeIndex()"
-    [class.block-section]="isSection(block)"
+    [class.block-break]="startsSection(block)"
     [class.block-instrumental]="isInstrumental(block)"
     [class.block-lyric]="isLyric(block)"
     (click)="seek.emit(blockStart(block))"
   >
-    <!-- Section heading -->
-    <ng-container *ngIf="isSection(block)">
-      <div class="section-name" [attr.data-kind]="block.kind">{{ block.name }}</div>
-    </ng-container>
-
     <!-- Instrumental passage, written as a bar chart -->
     <ng-container *ngIf="isInstrumental(block)">
       <div

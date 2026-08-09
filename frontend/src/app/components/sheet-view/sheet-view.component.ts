@@ -10,7 +10,6 @@ import {
 import {
   InstrumentalBlock,
   LyricBlock,
-  SectionBlock,
   SheetBlock,
   SheetDoc,
 } from '../../models/artifacts';
@@ -81,8 +80,10 @@ export class SheetViewComponent {
     return active;
   });
 
-  isSection(block: SheetBlock): block is SectionBlock {
-    return block.type === 'section';
+  /** True for the block that opens a section, which is spaced away from the
+   *  one before it. Sections are not named on the sheet. */
+  startsSection(block: SheetBlock): boolean {
+    return block.starts_section;
   }
 
   isInstrumental(block: SheetBlock): block is InstrumentalBlock {

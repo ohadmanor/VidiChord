@@ -105,13 +105,6 @@ export interface ChordsDoc {
 
 // --- stage 4 ---------------------------------------------------------------
 
-export interface SectionBlock {
-  type: 'section';
-  name: string;
-  kind: SectionKind;
-  start: number;
-}
-
 export interface InstrumentalBlock {
   type: 'instrumental';
   kind: SectionKind;
@@ -120,6 +113,11 @@ export interface InstrumentalBlock {
   start: number;
   end: number;
   bar_indices: number[];
+  /**
+   * First block of a new section. Sections are not named on the sheet, so this
+   * is what puts a paragraph break where a heading would otherwise go.
+   */
+  starts_section: boolean;
 }
 
 export interface LyricBlock {
@@ -130,9 +128,11 @@ export interface LyricBlock {
   start: number;
   end: number;
   line_index: number;
+  /** See `InstrumentalBlock.starts_section`. */
+  starts_section: boolean;
 }
 
-export type SheetBlock = SectionBlock | InstrumentalBlock | LyricBlock;
+export type SheetBlock = InstrumentalBlock | LyricBlock;
 
 export interface SheetDoc {
   title: string;

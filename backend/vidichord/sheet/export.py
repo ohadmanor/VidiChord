@@ -11,22 +11,26 @@ import re
 import time
 from typing import Any
 
-from ..models import InstrumentalBlock, LyricBlock, SectionBlock, SheetDoc
+from ..models import InstrumentalBlock, LyricBlock, SheetDoc
 
 #: Characters Windows forbids in a filename.
 _ILLEGAL = re.compile(r'[\\/*?:"<>|]')
 
 
 def render_text(sheet: SheetDoc) -> str:
-    """Render the sheet as songbook raw text, preserving section structure."""
+    """Render the sheet as songbook raw text.
+
+    Sections are left unnamed: a blank line between them is the whole of the
+    structure the reader sees, which is also how songbook reads a pasted lyric
+    back in.
+    """
     lines: list[str] = []
 
     for block in sheet.blocks:
-        if isinstance(block, SectionBlock):
-            if lines:
-                lines.append("")
-            lines.append(f"[{block.name}]")
-        elif isinstance(block, InstrumentalBlock):
+        if block.starts_section and lines:
+            lines.append("")
+
+        if isinstance(block, InstrumentalBlock):
             lines.append(block.text)
         elif isinstance(block, LyricBlock):
             if block.chord_line.strip():
