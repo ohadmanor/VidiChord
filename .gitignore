@@ -14,6 +14,10 @@ dist/
 build/
 backend/build/
 backend/dist/
+# release_windows.bat writes a several-hundred-megabyte exe here.
+release/
+# Generated from frontend/public/VidiChord.png during the release build.
+backend/VidiChord.ico
 
 # --- Local runtime data ---
 VidiChord_Files/

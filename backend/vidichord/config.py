@@ -31,10 +31,18 @@ BACKEND_DIR = PACKAGE_DIR.parent
 # Repository root when running from source; irrelevant when frozen.
 REPO_DIR = BACKEND_DIR.parent
 
-CONFIG_PATH = BACKEND_DIR / "config.json"
-
 # Bundled third-party binaries. PyInstaller unpacks datas into ``sys._MEIPASS``.
 _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", BACKEND_DIR))
+
+# Where user data belongs. ``_MEIPASS`` will not do: in a single-file build it
+# is a temporary directory the bootloader deletes on exit, so settings would be
+# forgotten and the song library would vanish between launches. Beside the
+# executable it persists, and the app stays portable - copy the exe and its
+# folder anywhere and the library follows.
+_FROZEN = bool(getattr(sys, "frozen", False))
+DATA_DIR = Path(sys.executable).resolve().parent if _FROZEN else BACKEND_DIR
+
+CONFIG_PATH = DATA_DIR / "config.json"
 
 FFMPEG_DIR = _BUNDLE_ROOT / "ffmpeg"
 ESSENTIA_BIN = (
@@ -47,9 +55,22 @@ _FRONTEND_CANDIDATES = (
     REPO_DIR / "frontend" / "dist" / "frontend" / "browser",
 )
 
-DEFAULT_LIBRARY_DIR = REPO_DIR / "VidiChord_Files"
+DEFAULT_LIBRARY_DIR = (DATA_DIR if _FROZEN else REPO_DIR) / "VidiChord_Files"
 
-PORT = 8001
+def _port() -> int:
+    """The port to serve on, overridable for when 8001 is already taken.
+
+    The release build's start-up check relies on this: a developer's own server
+    is usually sitting on 8001, and the check must not be skipped just because
+    of that.
+    """
+    raw = os.environ.get("VIDICHORD_PORT", "").strip()
+    if raw.isdigit() and 1 <= int(raw) <= 65535:
+        return int(raw)
+    return 8001
+
+
+PORT = _port()
 
 
 def frontend_dir() -> Path | None:

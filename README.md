@@ -127,6 +127,55 @@ Environment variables:
 | `VIDICHORD_WHISPER_MODEL` | Force a Whisper model, e.g. `tiny` on a slow machine |
 | `VIDICHORD_WHISPER_DEVICE` | `cpu` (default) or `cuda` |
 | `VIDICHORD_NO_BROWSER=1` | Do not open a browser on start |
+| `VIDICHORD_PORT` | Serve on another port when 8001 is taken (default `8001`) |
+
+---
+
+## Releasing
+
+```bat
+release_windows.bat
+```
+
+One command, from the repository root, to the file you hand someone:
+`release/VidiChord-<version>-win64.exe`. It needs a `.venv` from
+`backend/setup.bat` and npm on `PATH`; everything else it arranges itself.
+
+Eight steps, and it stops at the first one that fails:
+
+| | | |
+|---|---|---|
+| 1 | preflight | the venv, Node.js, npm, and whether madmom is there to bundle |
+| 2 | version | read from `vidichord/__init__.py`, which names the exe and stamps its file properties |
+| 3 | build tools | PyInstaller 6.x, plus the exe icon converted from the app logo |
+| 4 | tests | the whole suite; a red test stops the release (`--skip-tests`) |
+| 5 | ffmpeg | fetched now so it can be bundled |
+| 6 | frontend | Angular, production configuration, from a cleaned `dist/` |
+| 7 | executable | PyInstaller, single file |
+| 8 | package | name, size, SHA256, and starting the exe to see that it serves `/api/config` (`--skip-smoke`) |
+
+Step 8 earns its place: a missing hidden import in a PyInstaller bundle is
+invisible to the test suite and to the build itself, and only surfaces when the
+exe runs. Step 5 does too — ffmpeg is normally downloaded on first use, but in a
+single-file build the download target is inside the temporary extraction
+directory, which is deleted on exit, so an unbundled ffmpeg would be fetched
+again on every launch.
+
+### What the single file costs
+
+Everything is in one exe, so the target machine needs no Python, no Node and no
+installs. The price is that the bootloader unpacks the whole bundle — most of a
+gigabyte — into a temporary folder on *every* launch, before any of the app
+runs. Expect to wait. The console window stays open for that reason: it makes
+the wait legible, and it carries the pipeline's progress output afterwards.
+
+`backend/VidiChord.spec` builds the same app as a folder instead. It starts in
+seconds because nothing is unpacked, and it is the better choice for anything
+but handing over a single file.
+
+Settings and the song library are written next to the exe, not into the
+extraction directory that would take them with it when the app exits — so keep
+the exe somewhere writable rather than in `Program Files`.
 
 ---
 
