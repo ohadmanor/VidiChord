@@ -1,8 +1,9 @@
 """Stage 4 - assemble the song sheet.
 
 Walks the song in playing order, emitting one block per thing the reader sees:
-a section heading, a bar chart for an instrumental passage, or a lyric line
-with its chord row.
+a bar chart for an instrumental passage, or a lyric line with its chord row.
+Sections are not named on the sheet - the block that opens one is flagged
+``starts_section``, and a blank line is all the reader gets.
 
 This used to live in the Angular component, where it could not be tested
 alongside the three stages it depends on. The chord-placement algorithm is
@@ -19,7 +20,6 @@ from ..models import (
     LyricBlock,
     LyricsDoc,
     NO_CHORD,
-    SectionBlock,
     SheetDoc,
 )
 from ..sheet import bars as bars_mod
@@ -63,19 +63,13 @@ def build(lyrics: LyricsDoc, chords: ChordsDoc) -> SheetDoc:
     def emit_instrumental(run: instrumental.InstrumentalRun) -> None:
         selected = [chords.bars[position] for position in run.bar_positions]
         sheet.blocks.append(
-            SectionBlock(
-                name=run.kind.value.replace("_", " ").title(),
-                kind=run.kind,
-                start=run.start,
-            )
-        )
-        sheet.blocks.append(
             InstrumentalBlock(
                 kind=run.kind,
                 text=bars_mod.render(selected),
                 start=run.start,
                 end=run.end,
                 bar_indices=[bar.index for bar in selected],
+                starts_section=True,
             )
         )
 
@@ -87,7 +81,8 @@ def build(lyrics: LyricsDoc, chords: ChordsDoc) -> SheetDoc:
         if run is not None:
             emit_instrumental(run)
             emitted_runs.add(bar_position)
-            # A heading was just written, so the next vocal section re-announces.
+            # A passage just broke the flow, so the vocal section that follows
+            # is opened again and gets its own break.
             open_section = None
         if bar_position in instrumental_bars:
             continue
