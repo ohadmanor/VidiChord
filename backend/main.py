@@ -95,4 +95,10 @@ def _version() -> str:
 
 
 if __name__ == "__main__":
+    # Chord extraction fans madmom out over worker processes. In the frozen
+    # build a spawned worker re-runs this executable, and without this call it
+    # would start another server instead of doing its work.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()

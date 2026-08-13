@@ -331,7 +331,7 @@ goto fail
 :usage
 echo Usage: release_windows.bat [--skip-tests] [--skip-smoke] [--no-pause]
 echo.
-echo   Builds release\VidiChord-<version>-win64.exe, one self-contained file.
+echo   Builds release\VidiChord-^<version^>-win64.exe, one self-contained file.
 echo   Run backend\setup.bat once first.
 goto end
 

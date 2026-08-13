@@ -300,6 +300,25 @@
           <small class="muted">Where "Export to songbook" writes its JSON files.</small>
         </label>
 
+        <label class="field">
+          <span>YouTube cookies file</span>
+          <input type="text" [(ngModel)]="config.cookies_file" placeholder="cookies.txt" />
+          <small class="muted">
+            Needed when YouTube answers "Sign in to confirm you're not a bot". Export
+            cookies.txt with a browser extension while signed in to YouTube. A file named
+            cookies.txt next to the app is used automatically, with no setting here.
+          </small>
+        </label>
+
+        <label class="field">
+          <span>Or read cookies from a browser</span>
+          <input type="text" [(ngModel)]="config.cookies_browser" placeholder="firefox" />
+          <small class="muted">
+            Used only when no cookies file is set. On Windows, firefox works; Chrome and
+            Edge encrypt their cookie store so they cannot be read.
+          </small>
+        </label>
+
         <button class="btn btn-secondary advanced-toggle" (click)="showAdvanced = !showAdvanced">
           {{ showAdvanced ? 'Hide' : 'Show' }} chord-detection tuning
         </button>

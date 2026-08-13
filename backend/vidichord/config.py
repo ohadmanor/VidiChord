@@ -57,6 +57,27 @@ _FRONTEND_CANDIDATES = (
 
 DEFAULT_LIBRARY_DIR = (DATA_DIR if _FROZEN else REPO_DIR) / "VidiChord_Files"
 
+# Whether spawning helper processes is affordable. In a onefile build every
+# spawned worker re-runs the executable, and the bootloader re-extracts the
+# whole bundle to a fresh temp directory per process - so what saves minutes
+# in a normal install costs more than it saves there. Onefile extraction dirs
+# are named "_MEIxxxx"; a onedir bundle lives in "_internal" beside the exe.
+PROCESS_POOLS_OK = not (_FROZEN and _BUNDLE_ROOT.name.startswith("_MEI"))
+
+
+def int_env(name: str, default: int, minimum: int = 1) -> int:
+    """An integer tuning knob from the environment, clamped to be usable.
+
+    Anything that does not parse as a non-negative integer falls back to the
+    default, so a typo degrades to the built-in behaviour instead of crashing
+    a worker mid-pipeline.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw.isdigit():
+        return default
+    return max(minimum, int(raw))
+
+
 def _port() -> int:
     """The port to serve on, overridable for when 8001 is already taken.
 
@@ -86,10 +107,18 @@ class Settings:
 
     def __init__(self, library_dir: str | os.PathLike[str] | None = None,
                  sheets_dir: str | os.PathLike[str] | None = None,
+                 cookies_file: str | os.PathLike[str] | None = None,
+                 cookies_browser: str | None = None,
                  path: Path | None = None) -> None:
         self.library_dir = Path(library_dir) if library_dir else DEFAULT_LIBRARY_DIR
         # Empty means "not configured"; export refuses to run until it is set.
         self.sheets_dir = Path(sheets_dir) if sheets_dir else None
+        #: A Netscape-format cookie jar, so YouTube requests are made as a
+        #: signed-in user. See :mod:`vidichord.pipeline.stage1_audio`.
+        self.cookies_file = Path(cookies_file) if cookies_file else None
+        #: A browser to read those cookies from instead, e.g. "firefox" or
+        #: "chrome:Profile 1". Ignored when ``cookies_file`` is set.
+        self.cookies_browser = (cookies_browser or "").strip()
         #: Where :meth:`save` writes. Overridable so tests never touch the
         #: user's real config file.
         self.path = Path(path) if path else CONFIG_PATH
@@ -100,6 +129,8 @@ class Settings:
         return {
             "library_dir": str(self.library_dir),
             "sheets_dir": str(self.sheets_dir) if self.sheets_dir else "",
+            "cookies_file": str(self.cookies_file) if self.cookies_file else "",
+            "cookies_browser": self.cookies_browser,
         }
 
     @classmethod
@@ -107,6 +138,8 @@ class Settings:
         return cls(
             library_dir=data.get("library_dir") or None,
             sheets_dir=data.get("sheets_dir") or None,
+            cookies_file=data.get("cookies_file") or None,
+            cookies_browser=data.get("cookies_browser") or None,
             path=path,
         )
 

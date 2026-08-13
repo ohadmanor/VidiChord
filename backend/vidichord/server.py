@@ -92,6 +92,10 @@ class RerunRequest(BaseModel):
 class SettingsRequest(BaseModel):
     library_dir: str = ""
     sheets_dir: str = ""
+    #: None means "leave as it is", so saving settings from a client that does
+    #: not know about these fields cannot wipe them.
+    cookies_file: str | None = None
+    cookies_browser: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -436,9 +440,14 @@ def create_app() -> FastAPI:
 
     @app.put("/api/config")
     def put_config(request: SettingsRequest) -> dict:
+        current = settings()
+        data = request.model_dump()
+        for name in ("cookies_file", "cookies_browser"):
+            if data.get(name) is None:
+                data[name] = current.to_dict()[name]
         # Keep writing to wherever the current settings came from, so a test
         # or an alternate install never writes over the user's config file.
-        updated = Settings.from_dict(request.model_dump(), path=settings().path)
+        updated = Settings.from_dict(data, path=current.path)
         updated.save()
         app.state.settings = updated
         return updated.to_dict()

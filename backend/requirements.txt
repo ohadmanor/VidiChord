@@ -16,7 +16,8 @@ yt-dlp>=2024.4.9
 requests>=2.31
 
 # --- transcription ---
-faster-whisper>=1.0
+# 1.1 is the floor that knows the "large-v3-turbo" model alias.
+faster-whisper>=1.1
 
 # --- audio analysis ---
 librosa>=0.10

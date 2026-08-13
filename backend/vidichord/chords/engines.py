@@ -20,10 +20,12 @@ their outputs are fused rather than one being trusted:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +41,9 @@ from .vocabulary import (
 )
 
 _HOP_LENGTH = 512
+
+#: The rate madmom's models were trained at; its front-ends hard-code it.
+_MADMOM_SR = 44100
 
 #: Essentia emits one chord frame per 2048 samples at 44.1 kHz.
 ESSENTIA_FRAME_SECONDS = 2048.0 / 44100.0
@@ -135,21 +140,53 @@ def _build_templates() -> tuple[list[str], np.ndarray, np.ndarray]:
     return states, np.array(templates), np.array(priors)
 
 
-def librosa_beat_chords(
-    y: np.ndarray, sr: float, intervals: list[tuple[float, float]]
-) -> list[str]:
-    """Template-match chroma against chord templates, one label per beat."""
+#: Chroma is computed at this rate rather than the mix's native 44.1 kHz.
+#: The information chroma reads tops out well below the 11 kHz Nyquist this
+#: leaves, and HPSS plus two CQTs are roughly twice as fast on half the
+#: samples - they are the bulk of this engine's cost.
+_CHROMA_SR = 22050
+
+
+@dataclass
+class ChromaFeatures:
+    """Frame-level features, computed once and mapped onto any beat grid."""
+
+    chroma: np.ndarray
+    bass_chroma: np.ndarray
+    sr: float
+
+
+def librosa_chord_features(y: np.ndarray, sr: float) -> ChromaFeatures:
+    """The frame-level half of the librosa engine.
+
+    Needs no beat grid, so it can run concurrently with beat tracking.
+    """
     import librosa
 
-    states, templates, priors = _build_templates()
+    if sr != _CHROMA_SR:
+        y = librosa.resample(y, orig_sr=sr, target_sr=_CHROMA_SR)
+        sr = _CHROMA_SR
 
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=_HOP_LENGTH)
+    harmonic = harmonic_component(y)
+    chroma = librosa.feature.chroma_cqt(y=harmonic, sr=sr, hop_length=_HOP_LENGTH)
 
     # A separate low-register CQT gives the bass note for slash chords.
-    bass_cqt = np.abs(librosa.cqt(y=y, sr=sr, fmin=32.7, n_bins=36, hop_length=_HOP_LENGTH))
+    bass_cqt = np.abs(
+        librosa.cqt(y=harmonic, sr=sr, fmin=32.7, n_bins=36, hop_length=_HOP_LENGTH)
+    )
     bass_chroma = np.zeros((12, bass_cqt.shape[1]))
     for pitch in range(12):
         bass_chroma[pitch, :] = np.sum(bass_cqt[pitch::12, :], axis=0)
+
+    return ChromaFeatures(chroma=chroma, bass_chroma=bass_chroma, sr=float(sr))
+
+
+def librosa_beat_chords(
+    features: ChromaFeatures, intervals: list[tuple[float, float]]
+) -> list[str]:
+    """Template-match chroma against chord templates, one label per beat."""
+    states, templates, priors = _build_templates()
+    chroma, bass_chroma, sr = features.chroma, features.bass_chroma, features.sr
 
     n_beats = len(intervals)
     beat_chroma = np.zeros((12, n_beats))
@@ -216,8 +253,6 @@ def run_essentia(binary: Path, audio_path: Path) -> tuple[dict, dict]:
         out_path = Path(workspace) / "essentia.json"
 
         env_path = str(binary.parent)
-        import os
-
         env = os.environ.copy()
         if env_path not in env.get("PATH", ""):
             env["PATH"] = env_path + os.pathsep + env.get("PATH", "")
@@ -332,11 +367,95 @@ def madmom_segments(y_44k: np.ndarray) -> list[tuple[float, float, str]]:
     )
     from madmom.processors import SequentialProcessor
 
-    signal = Signal(np.asarray(y_44k, dtype=np.float32), sample_rate=44100)
+    signal = Signal(np.asarray(y_44k, dtype=np.float32), sample_rate=_MADMOM_SR)
     recognise = SequentialProcessor(
         [CNNChordFeatureProcessor(), CRFChordRecognitionProcessor()]
     )
     return [(float(s), float(e), str(label)) for s, e, label in recognise(signal)]
+
+
+#: Audio either side of a chunk that is analysed but not reported, so the CNN
+#: and CRF see full context at every reported label. Their temporal horizon is
+#: a couple of seconds; ten is comfortably beyond it.
+_CHUNK_OVERLAP_SECONDS = 10.0
+
+#: Songs shorter than this are not worth the worker start-up cost.
+_MIN_PARALLEL_SECONDS = 120.0
+
+
+def _chord_workers() -> int:
+    from ..config import PROCESS_POOLS_OK, int_env
+
+    default = min(4, max(1, (os.cpu_count() or 4) // 4)) if PROCESS_POOLS_OK else 1
+    return int_env("VIDICHORD_CHORD_WORKERS", default)
+
+
+def _madmom_chunk(
+    chunk: np.ndarray, offset: float, core_start: float, core_end: float
+) -> list[tuple[float, float, str]]:
+    """Worker-process entry: recognise one chunk, report only its core."""
+    out: list[tuple[float, float, str]] = []
+    for start, end, label in madmom_segments(chunk):
+        start = max(start + offset, core_start)
+        end = min(end + offset, core_end)
+        if end > start:
+            out.append((start, end, label))
+    return out
+
+
+def madmom_segments_parallel(y_44k: np.ndarray) -> list[tuple[float, float, str]]:
+    """Chord recognition split across worker processes.
+
+    madmom's nets are pure NumPy driven by Python loops that never release the
+    GIL, so threads cannot speed them up - only processes can. The signal is
+    cut into per-worker chunks whose overlap is trimmed away on merge; chord
+    boundaries are only consumed at beat resolution (~0.4 s), far coarser than
+    any drift chunking can introduce. Falls back to a single process whenever
+    workers are unavailable or not worth their start-up cost.
+    """
+    duration = len(y_44k) / _MADMOM_SR
+    workers = _chord_workers()
+    if workers <= 1 or duration < _MIN_PARALLEL_SECONDS:
+        return madmom_segments(y_44k)
+
+    core_edges = np.linspace(0.0, duration, workers + 1)
+    jobs = []
+    for index in range(workers):
+        core_start, core_end = float(core_edges[index]), float(core_edges[index + 1])
+        padded_start = max(0.0, core_start - _CHUNK_OVERLAP_SECONDS)
+        padded_end = min(duration, core_end + _CHUNK_OVERLAP_SECONDS)
+        chunk = y_44k[int(padded_start * _MADMOM_SR): int(padded_end * _MADMOM_SR)]
+        jobs.append((chunk, padded_start, core_start, core_end))
+
+    try:
+        from concurrent.futures import ProcessPoolExecutor
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            parts = list(pool.map(_madmom_chunk, *zip(*jobs)))
+    except Exception as exc:  # pragma: no cover - depends on host process
+        print(f"Parallel chord recognition failed ({exc}); "
+              "falling back to one process", file=sys.stderr)
+        return madmom_segments(y_44k)
+
+    return _coalesce([segment for part in parts for segment in part])
+
+
+def _coalesce(
+    segments: list[tuple[float, float, str]]
+) -> list[tuple[float, float, str]]:
+    """Merge segments a chunk boundary cut in two.
+
+    Beat mapping picks each beat's label by its single largest overlapping
+    segment, so a chord split at a seam would count as two half-weight
+    segments and could lose to a chord it actually outweighs.
+    """
+    merged: list[tuple[float, float, str]] = []
+    for start, end, label in segments:
+        if merged and merged[-1][2] == label and abs(merged[-1][1] - start) < 1e-6:
+            merged[-1] = (merged[-1][0], end, label)
+        else:
+            merged.append((start, end, label))
+    return merged
 
 
 def map_madmom_to_beats(

@@ -18,9 +18,12 @@ from typing import Any, Callable
 DETECTION_MODEL = "tiny"
 
 #: Hebrew is served by a community model tuned on Hebrew speech; everything
-#: else uses stock large-v3.
+#: else uses large-v3-turbo. Turbo keeps large-v3's encoder but has 4 decoder
+#: layers instead of 32, which makes it several times faster on CPU for a
+#: barely measurable accuracy cost - and the transcript is only a timing
+#: reference here, so that trade is free.
 HEBREW_MODEL = "ivrit-ai/whisper-large-v3-turbo-ct2"
-DEFAULT_MODEL = "large-v3"
+DEFAULT_MODEL = "large-v3-turbo"
 
 #: Seconds of audio to inspect when detecting the language.
 DETECTION_WINDOW = 30.0
@@ -41,6 +44,29 @@ _COMPUTE_TYPE = os.environ.get("VIDICHORD_WHISPER_COMPUTE", "int8")
 #: Overrides model selection entirely. Useful on modest hardware, and for
 #: tests, where "tiny" avoids a multi-gigabyte download.
 _MODEL_ENV = os.environ.get("VIDICHORD_WHISPER_MODEL") or None
+
+
+from ..config import int_env
+
+#: ctranslate2 runs on 4 CPU threads unless told otherwise, which leaves most
+#: of a modern laptop idle during the slowest step of the whole pipeline.
+_CPU_THREADS = int_env("VIDICHORD_WHISPER_THREADS", max(4, (os.cpu_count() or 8) - 2))
+
+#: Greedy decoding. Whisper's default beam of 5 buys a slightly better
+#: transcript for ~3x the decode time, but the words are replaced by official
+#: lyrics anyway - only the timings survive, and those don't need a beam.
+_BEAM_SIZE = int_env("VIDICHORD_WHISPER_BEAM", 1)
+
+#: 30-second windows decoded per batch; 1 means sequential decoding.
+#: Off by default: ctranslate2 4.8's batched encoder overflows its worker
+#: threads' stack on Windows CPU builds (a hard crash, not an exception).
+#: Worth enabling on CUDA, where batching is a large win and the crash was
+#: not observed.
+_BATCH_SIZE = int_env("VIDICHORD_WHISPER_BATCH", 1)
+
+#: Escape hatch: VIDICHORD_WHISPER_VAD=0 transcribes everything, for the
+#: rare mix whose vocals Silero misses even at the gentle threshold below.
+_USE_VAD = int_env("VIDICHORD_WHISPER_VAD", 1, minimum=0) > 0
 
 ProgressFn = Callable[[str], None]
 
@@ -80,6 +106,24 @@ def model_for_language(language: str | None) -> str:
     return HEBREW_MODEL if language == "he" else DEFAULT_MODEL
 
 
+def _collect_segments(raw_segments, on_progress: ProgressFn | None) -> list[Segment]:
+    """Drain the decoder's lazy generator - this is where the minutes go."""
+    segments: list[Segment] = []
+    for raw in raw_segments:
+        words = [
+            {"text": word.word.strip(), "start": word.start, "end": word.end}
+            for word in (getattr(raw, "words", None) or [])
+            if word.word.strip()
+        ]
+        segments.append(
+            Segment(start=raw.start, end=raw.end, text=raw.text.strip(), words=words)
+        )
+        if on_progress and len(segments) % 10 == 0:
+            minutes, seconds = divmod(int(raw.end), 60)
+            on_progress(f"Transcribing audio... ({minutes}:{seconds:02d} done)")
+    return segments
+
+
 class WhisperEngine:
     """Loads faster-whisper models on demand and keeps the last one warm."""
 
@@ -95,7 +139,9 @@ class WhisperEngine:
 
         from faster_whisper import WhisperModel
 
-        model = WhisperModel(name, device=_DEVICE, compute_type=_COMPUTE_TYPE)
+        model = WhisperModel(
+            name, device=_DEVICE, compute_type=_COMPUTE_TYPE, cpu_threads=_CPU_THREADS
+        )
         # Keep the detector plus at most one large model resident.
         for cached in list(self._models):
             if cached != DETECTION_MODEL:
@@ -171,7 +217,26 @@ class WhisperEngine:
             on_progress(f"Loading model '{model_name}'...")
         model = self._load(model_name)
 
-        options: dict[str, Any] = {"word_timestamps": True}
+        options: dict[str, Any] = {
+            "word_timestamps": True,
+            "beam_size": _BEAM_SIZE,
+            # Feeding each window the previous window's text is how Whisper
+            # falls into repetition loops on music, and every looping window
+            # decodes to the 448-token cap before giving up.
+            "condition_on_previous_text": False,
+        }
+        if _USE_VAD:
+            # Skip instrumental passages instead of decoding them. There are
+            # no words there to time, only hallucinations to clean up.
+            options["vad_filter"] = True
+            # Silero's defaults are tuned for speech; sung vocals sitting low
+            # in a mix score under its 0.5 threshold and whole outros vanish
+            # from the transcript. Detect gently, pad generously.
+            options["vad_parameters"] = {
+                "threshold": 0.3,
+                "min_silence_duration_ms": 1000,
+                "speech_pad_ms": 600,
+            }
         if language:
             options["language"] = language
         if initial_prompt:
@@ -180,22 +245,45 @@ class WhisperEngine:
 
         if on_progress:
             on_progress("Transcribing audio...")
-        raw_segments, info = model.transcribe(audio_path, **options)
+        raw_segments, info = self._start_transcription(model, audio_path, options)
+        segments = _collect_segments(raw_segments, on_progress)
 
-        segments: list[Segment] = []
-        for raw in raw_segments:
-            words = [
-                {"text": word.word.strip(), "start": word.start, "end": word.end}
-                for word in (getattr(raw, "words", None) or [])
-                if word.word.strip()
-            ]
-            segments.append(
-                Segment(
-                    start=raw.start,
-                    end=raw.end,
-                    text=raw.text.strip(),
-                    words=words,
-                )
-            )
+        if not segments and _USE_VAD:
+            # Silero heard no vocals at all - quiet singing it cannot follow,
+            # or a genuine instrumental. Decode everything, as the pre-VAD
+            # behaviour did, so downstream still gets whatever there is.
+            if on_progress:
+                on_progress("No vocals detected; transcribing without the filter...")
+            options["vad_filter"] = False
+            options.pop("vad_parameters", None)
+            raw_segments, info = self._start_transcription(model, audio_path, options)
+            segments = _collect_segments(raw_segments, on_progress)
 
         return Transcript(language=language or info.language, segments=segments)
+
+    @staticmethod
+    def _start_transcription(model, audio_path: str, options: dict[str, Any]):
+        """Kick off decoding, batched when the runtime supports it.
+
+        Batched decoding feeds several 30-second windows through the model at
+        once, which is what actually saturates a multi-core CPU; sequential
+        decoding leaves it mostly idle. Falls back to the sequential path on
+        older faster-whisper releases.
+        """
+        if _BATCH_SIZE > 1:
+            try:
+                from faster_whisper import BatchedInferencePipeline
+
+                pipeline = BatchedInferencePipeline(model)
+                return pipeline.transcribe(
+                    audio_path, batch_size=_BATCH_SIZE, **options
+                )
+            except (ImportError, TypeError, ValueError) as exc:
+                # Releases differ in what the batched pipeline accepts;
+                # decode sequentially rather than fail the stage.
+                print(f"Batched transcription unavailable: {exc}", file=sys.stderr)
+
+        # Sequential path. Cap the temperature ladder: on repetitive lyrics
+        # the compression-ratio check trips constantly, and the stock ladder
+        # re-decodes such windows up to six times.
+        return model.transcribe(audio_path, temperature=[0.0, 0.4], **options)

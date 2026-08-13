@@ -13,17 +13,23 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import zipfile
 from pathlib import Path
 
 import requests
 
-from ..config import FFMPEG_DIR, Settings
+from ..config import DATA_DIR, FFMPEG_DIR, Settings
 from ..models import SourceDoc
 from ..project import SongProject, make_song_id
 from . import StageContext
 
 _FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+#: A cookie jar with this name, sitting beside the executable, is picked up
+#: without any configuration. It is the least fiddly way to hand the app a
+#: signed-in session.
+COOKIE_FILENAME = "cookies.txt"
 
 _ILLEGAL = re.compile(r'[\\/:*?"<>|]')
 _WHITESPACE = re.compile(r"\s+")
@@ -104,13 +110,169 @@ def split_names(info: dict) -> tuple[str, str]:
     return uploader or "Unknown", title or "Unknown"
 
 
-def probe(url: str) -> dict:
+def cookie_options(settings: Settings | None = None) -> dict:
+    """yt-dlp options that make requests as a signed-in user.
+
+    YouTube meets anonymous requests with "Sign in to confirm you're not a
+    bot", and no choice of player client gets around it - the audio formats
+    themselves are withheld. Sending the user's own cookies is yt-dlp's
+    documented answer, so the app looks for them in three places: the setting,
+    the environment, and a ``cookies.txt`` beside the executable.
+    """
+    explicit = getattr(settings, "cookies_file", None)
+    candidates = [
+        Path(explicit) if explicit else None,
+        Path(os.environ["VIDICHORD_COOKIES"])
+        if os.environ.get("VIDICHORD_COOKIES")
+        else None,
+        DATA_DIR / COOKIE_FILENAME,
+    ]
+    for candidate in candidates:
+        if candidate is not None and candidate.is_file():
+            return {"cookiefile": str(candidate)}
+
+    browser = (
+        getattr(settings, "cookies_browser", "")
+        or os.environ.get("VIDICHORD_COOKIES_BROWSER", "")
+    ).strip()
+    if browser:
+        # yt-dlp wants (browser, profile, keyring, container).
+        name, _, profile = browser.partition(":")
+        return {"cookiesfrombrowser": (name.strip().lower(), profile.strip() or None, None, None)}
+
+    return {}
+
+
+#: First line of every "YouTube would not identify us" explanation. Short and
+#: unmistakable, because it is the one thing the user has to act on - the
+#: paragraphs after it are detail.
+HEADLINE = "You need to log in to YouTube."
+
+#: Signatures of a refusal that more retries will not fix.
+_BLOCKED_SIGNS = (
+    "confirm you",  # "Sign in to confirm you're not a bot" - any apostrophe.
+    "not a bot",
+    "429",
+    "too many requests",
+    "po token",
+    "requested format is not available",
+    "only images are available",
+)
+
+
+#: Signatures of yt-dlp failing to read a browser's cookie store, rather than
+#: of YouTube refusing anything. Windows browsers are the usual cause.
+_COOKIE_READ_SIGNS = (
+    "could not copy",
+    "cookie database",
+    "failed to decrypt",
+    "dpapi",
+    "unsupported browser",
+)
+
+
+def explain_failure(
+    error: Exception, settings: Settings | None = None, context: str = ""
+) -> str:
+    """Turn a yt-dlp refusal into something a user can act on.
+
+    ``context`` carries yt-dlp's own messages when they were captured rather
+    than printed, so a refusal is recognised by them too.
+    """
+    raw = str(error)
+    lowered = f"{raw} {context}".lower()
+
+    if any(sign in lowered for sign in _COOKIE_READ_SIGNS):
+        return (
+            f"{HEADLINE}\n\n"
+            "VidiChord could not read the cookies out of that browser. On "
+            "Windows this is normal for Chrome and Edge: they encrypt their "
+            "cookie store, and Chrome also locks it while it is running.\n\n"
+            f"Export a '{COOKIE_FILENAME}' file instead (any 'Get cookies.txt' "
+            "browser extension does it while you are signed in to YouTube) and "
+            "save it next to the app, or point \"cookies_browser\" at "
+            "\"firefox\".\n\n"
+            f"Original error: {raw}"
+        )
+
+    if not any(sign in lowered for sign in _BLOCKED_SIGNS):
+        return raw
+
+    if cookie_options(settings):
+        return (
+            f"{HEADLINE}\n\n"
+            "VidiChord sent the cookies it is set up to use and YouTube still "
+            "refused, which almost always means they have expired. Sign in to "
+            f"YouTube again and export a fresh '{COOKIE_FILENAME}'.\n\n"
+            "YouTube also caps how much one network may fetch. If you have "
+            "tried several times in a row, or share an office connection, a "
+            "wait may be needed on top of signing in."
+        )
+    return (
+        f"{HEADLINE}\n\n"
+        "YouTube will not serve this video's audio to a request it cannot "
+        "identify. It asks the caller to prove it is not a bot and withholds "
+        "every audio format until it does, and VidiChord cannot answer that on "
+        "its own - it needs your session.\n\n"
+        f"Save a '{COOKIE_FILENAME}' file next to the app: any 'Get "
+        "cookies.txt' browser extension exports one while you are signed in to "
+        "YouTube. Or set \"cookies_browser\" to \"firefox\" in Settings. Then "
+        "try the song again.\n\n"
+        "YouTube also caps how much one network may fetch, so if you have "
+        "tried several times in a row, a wait may be needed as well - signing "
+        "in alone will not clear that part.\n\n"
+        "\"Add from file\" needs none of this, if you already have the audio."
+    )
+
+
+class _QuietLogger:
+    """Keeps yt-dlp's own output off the console.
+
+    Its error lines are what users were reading and reporting: several lines of
+    advice about command-line flags for a tool they never ran. This stage
+    translates the failure itself, so the raw text is kept for context and the
+    explanation is printed in its place.
+    """
+
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    def debug(self, message: str) -> None:
+        pass
+
+    def info(self, message: str) -> None:
+        pass
+
+    def warning(self, message: str) -> None:
+        # Warnings carry the "requires a PO Token" hints, which say why no
+        # audio format came back. Worth keeping as context, not worth showing.
+        self.errors.append(str(message).strip())
+
+    def error(self, message: str) -> None:
+        self.errors.append(str(message).strip())
+
+
+def probe(url: str, settings: Settings | None = None) -> dict:
     """Fetch video metadata without downloading the media."""
     import yt_dlp
 
-    options = {"noplaylist": True, "quiet": True, "no_warnings": True}
-    with yt_dlp.YoutubeDL(options) as ydl:
-        return ydl.extract_info(url, download=False)
+    logger = _QuietLogger()
+    options = {
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "logger": logger,
+    }
+    options.update(cookie_options(settings))
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            return ydl.extract_info(url, download=False)
+    except Exception as error:
+        message = explain_failure(error, settings, " ".join(logger.errors))
+        # The exe runs with a console, and that is where a user watching a run
+        # looks first. Say the same thing there as in the app.
+        print(f"\n{message}\n", file=sys.stderr)
+        raise RuntimeError(message) from error
 
 
 class _ProgressLogger:
@@ -138,7 +300,9 @@ class _ProgressLogger:
         self._report(f"Error: {message}", None)
 
 
-def download(url: str, destination: Path, report=None) -> None:
+def download(
+    url: str, destination: Path, report=None, settings: Settings | None = None
+) -> None:
     """Download the best audio stream and write it to ``destination`` as WAV."""
     import yt_dlp
 
@@ -156,12 +320,17 @@ def download(url: str, destination: Path, report=None) -> None:
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
         "postprocessor_args": {"ffmpeg": ["-acodec", "pcm_s16le", "-ar", "44100"]},
     }
-    if report:
-        options["logger"] = _ProgressLogger(report)
+    options.update(cookie_options(settings))
+    options["logger"] = _ProgressLogger(report) if report else _QuietLogger()
 
-    with yt_dlp.YoutubeDL(options) as ydl:
-        if ydl.download([url]) != 0:
-            raise RuntimeError("Download or conversion failed")
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            if ydl.download([url]) != 0:
+                raise RuntimeError("Download or conversion failed")
+    except Exception as error:
+        message = explain_failure(error, settings)
+        print(f"\n{message}\n", file=sys.stderr)
+        raise RuntimeError(message) from error
 
     if not destination.is_file():
         raise RuntimeError(f"Expected {destination.name} to exist after download")
@@ -175,7 +344,7 @@ def prepare_from_youtube(url: str, settings: Settings, report=None) -> SongProje
     """
     if report:
         report("Reading video details...", 0.0)
-    info = probe(url)
+    info = probe(url, settings)
     artist, title = split_names(info)
 
     project = SongProject.create(
@@ -243,6 +412,6 @@ def run(context: StageContext) -> None:
         context.report(f"Copying {Path(source.url).name}...", 0.0)
         shutil.copyfile(source.url, project.audio_path)
     else:
-        download(source.url, project.audio_path, context.report)
+        download(source.url, project.audio_path, context.report, context.settings)
 
     context.report("Audio ready.", 100.0)

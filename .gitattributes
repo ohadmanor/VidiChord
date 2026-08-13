@@ -1,0 +1,7 @@
+# Windows batch files must keep CRLF line endings. cmd.exe reads a batch file
+# in chunks and resolves `goto` by seeking through those chunks, so with
+# LF-only endings a label lookup can land mid-line and fail with "The system
+# cannot find the batch label specified" - for some labels and not others,
+# depending on where they happen to sit in the file.
+*.bat text eol=crlf
+*.cmd text eol=crlf

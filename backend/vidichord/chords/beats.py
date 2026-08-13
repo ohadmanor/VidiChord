@@ -10,6 +10,7 @@ force the first chord onto a bar line.
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from statistics import median
@@ -21,6 +22,20 @@ SUPPORTED_METERS = (3, 4)
 
 #: madmom operates on a 100 fps activation function.
 _FPS = 100
+
+
+def _madmom_threads() -> int:
+    """Worker processes for madmom's 8-network downbeat ensemble.
+
+    madmom fans its ensemble out over a multiprocessing pool when asked
+    (threads cannot help - its nets hold the GIL), and the ensemble dominates
+    beat-tracking time. Requires ``multiprocessing.freeze_support()`` in the
+    frozen build's entry point, which ``main.py`` provides.
+    """
+    from ..config import PROCESS_POOLS_OK, int_env
+
+    default = min(4, max(1, (os.cpu_count() or 4) // 3)) if PROCESS_POOLS_OK else 1
+    return int_env("VIDICHORD_BEAT_THREADS", default)
 
 
 @dataclass
@@ -112,9 +127,13 @@ def _track_downbeats(signal) -> tuple[list[float], list[int], int] | None:
             RNNDownBeatProcessor,
         )
 
-        activations = RNNDownBeatProcessor()(signal)
+        threads = _madmom_threads()
+        activations = RNNDownBeatProcessor(num_threads=threads)(signal)
         processor = DBNDownBeatTrackingProcessor(
-            beats_per_bar=list(SUPPORTED_METERS), fps=_FPS
+            beats_per_bar=list(SUPPORTED_METERS),
+            fps=_FPS,
+            # One decode per candidate meter; capped by madmom at that count.
+            num_threads=min(threads, len(SUPPORTED_METERS)),
         )
         result = processor(activations)
     except Exception as exc:  # pragma: no cover - model/runtime dependent
@@ -142,7 +161,7 @@ def _track_beats_only(signal) -> list[float] | None:
     try:
         from madmom.features.beats import DBNBeatTrackingProcessor, RNNBeatProcessor
 
-        activations = RNNBeatProcessor()(signal)
+        activations = RNNBeatProcessor(num_threads=_madmom_threads())(signal)
         beats = DBNBeatTrackingProcessor(fps=_FPS)(activations)
     except Exception as exc:  # pragma: no cover - model/runtime dependent
         print(f"Beat tracking failed: {exc}", file=sys.stderr)

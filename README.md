@@ -23,8 +23,8 @@ and re-run stage 3 without transcribing the song again.
   │                                                  │    01_source.json
   ├──────────────────────────────────────────────────┤
   │ 2. Lyrics     detect language (tiny model, 30s)  │
-  │               transcribe once (large-v3, or the  │──▶ 02_lyrics.json
-  │                 Hebrew-tuned model)              │
+  │               transcribe once (large-v3-turbo,   │──▶ 02_lyrics.json
+  │                 or the Hebrew-tuned model)       │
   │               fetch real lyrics: LRClib → Genius │
   │               align them onto the transcript     │
   │               recover verse/chorus structure     │
@@ -116,9 +116,39 @@ yt-dlp with some YouTube downloads.
 - `library_dir` — where songs are stored, one folder each
 - `sheets_dir` — where "Export to songbook" writes
 
+plus two optional keys for identifying YouTube requests, described below:
+
+- `cookies_file` — a Netscape-format cookie jar to send with them
+- `cookies_browser` — a browser to read those cookies from instead
+
 The file is gitignored. Copy `config.example.json` to start. It holds no
 secrets, and VidiChord needs no API keys at all — lyrics come from LRClib and
 Genius, both open, and transcription runs locally.
+
+### When YouTube says "Sign in to confirm you're not a bot"
+
+YouTube no longer serves audio to unidentified requests. When it decides a
+request is one, it withholds every audio format and stage 1 fails with that
+message — the app reports what to do, and this is the longer version.
+
+Give the app your own YouTube session, which is what yt-dlp documents:
+
+1. **A cookie jar beside the app.** Export `cookies.txt` with any "Get
+   cookies.txt" browser extension while signed in to YouTube, and save it next
+   to `VidiChord.exe` (or in `backend/` when running from source). It is found
+   with no configuration at all.
+2. **Or name a browser** in `cookies_browser` — `firefox` is the one that
+   works on Windows. Chrome and Edge encrypt their cookie store so yt-dlp
+   cannot read it, and Chrome also locks the file while it is running.
+
+`VIDICHORD_COOKIES` and `VIDICHORD_COOKIES_BROWSER` override both.
+
+A second, separate limit is per-network rather than per-request: fetch a lot in
+a short time, or share an office connection, and YouTube answers `429 Too Many
+Requests` for a while. No cookie fixes that one — only waiting does.
+
+Local audio files are unaffected. "Add from file" needs none of this, and is
+the reliable path when YouTube is being difficult.
 
 Environment variables:
 
@@ -126,6 +156,14 @@ Environment variables:
 |---|---|
 | `VIDICHORD_WHISPER_MODEL` | Force a Whisper model, e.g. `tiny` on a slow machine |
 | `VIDICHORD_WHISPER_DEVICE` | `cpu` (default) or `cuda` |
+| `VIDICHORD_WHISPER_THREADS` | CPU threads for transcription (default: all cores minus two) |
+| `VIDICHORD_WHISPER_BEAM` | Beam size (default `1`; the transcript is only a timing reference) |
+| `VIDICHORD_WHISPER_BATCH` | Windows decoded per batch (default `0` = sequential; try `8` on CUDA) |
+| `VIDICHORD_BEAT_THREADS` | Worker processes for madmom's downbeat ensemble (default: cores/3, max 4; 1 in the single-file exe, where each worker re-extracts the bundle) |
+| `VIDICHORD_CHORD_WORKERS` | Worker processes for madmom chord recognition (default: cores/4, max 4; 1 in the single-file exe) |
+| `VIDICHORD_WHISPER_VAD` | `0` to transcribe instrumental passages too (default `1`: skip them) |
+| `VIDICHORD_COOKIES` | Path to a `cookies.txt` for YouTube requests |
+| `VIDICHORD_COOKIES_BROWSER` | Read YouTube cookies from this browser, e.g. `firefox` |
 | `VIDICHORD_NO_BROWSER=1` | Do not open a browser on start |
 | `VIDICHORD_PORT` | Serve on another port when 8001 is taken (default `8001`) |
 

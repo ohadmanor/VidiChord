@@ -109,7 +109,12 @@ export class AppComponent implements OnInit, OnDestroy {
   // --- settings ------------------------------------------------------------
   showSettingsModal = false;
   showAdvanced = false;
-  config: AppConfig = { library_dir: '', sheets_dir: '' };
+  config: AppConfig = {
+    library_dir: '',
+    sheets_dir: '',
+    cookies_file: '',
+    cookies_browser: '',
+  };
   fusion: FusionConfig = structuredClone(DEFAULT_FUSION);
   cleanup: CleanupConfig = structuredClone(DEFAULT_CLEANUP);
   settingsMessage = '';

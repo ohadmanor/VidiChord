@@ -204,6 +204,14 @@ class ChordsDoc(Artifact):
     #: True when beat positions came from madmom's downbeat tracker rather
     #: than a fallback, so the bar grid can be trusted.
     downbeats_tracked: bool = False
+    #: Fingerprint of the audio these predictions were computed from, so a
+    #: re-run can tell whether the stored per-beat engine predictions still
+    #: describe the file on disk. Empty on documents from older versions.
+    audio_fingerprint: str = ""
+    #: Version of the engine implementations that produced ``beat.sources``.
+    #: Bumped when an engine's algorithm changes, so stored predictions from
+    #: an older implementation are not re-fused as if they were current.
+    engine_version: int = 0
     bars: list[Bar] = Field(default_factory=list)
 
     def iter_beats(self):

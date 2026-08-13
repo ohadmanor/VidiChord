@@ -917,3 +917,9 @@ body {
   font-size: 0.85rem;
   margin-bottom: 20px;
 }
+
+/* Some failures are explained over several short paragraphs, so the breaks in
+   them have to survive; without this they collapse into one block of text. */
+.alert-error span {
+  white-space: pre-line;
+}

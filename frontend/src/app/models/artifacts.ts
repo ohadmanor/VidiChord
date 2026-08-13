@@ -173,6 +173,10 @@ export interface SongSummary {
 export interface AppConfig {
   library_dir: string;
   sheets_dir: string;
+  /** Cookie jar sent with YouTube requests, so they are not seen as a bot. */
+  cookies_file: string;
+  /** A browser to read those cookies from instead. */
+  cookies_browser: string;
 }
 
 // --- tuning ----------------------------------------------------------------
