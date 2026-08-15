@@ -80,6 +80,12 @@ detected key weights chords that belong to it. Viterbi then decodes the whole
 song at once, which lets one confident engine overrule two mistaken ones
 without producing a progression that lurches between keys.
 
+The engines are **not** weighted equally. madmom's pretrained CRF is worth far
+more than the other two, and the weights say so — 0.73 against 0.05 each. They
+still matter: they break madmom's ties, and librosa is the only source of the
+bass notes behind slash chords. Those numbers are measured, not guessed; see
+"Tuning chord extraction" below.
+
 A cleanup pass then absorbs chord runs shorter than two beats — real music
 rarely changes chord for a single beat, so those are almost always noise.
 
@@ -302,6 +308,35 @@ tracking, whole bars come back as no-chord. Fewer changes, less music.
 
 madmom also costs time — roughly 280s per song against 75s without, because its
 RNN beat tracker and CNN chord model both run over the full audio.
+
+### Tuning chord extraction
+
+Noise metrics say how *tidy* the chords are, not how *right* they are — a config
+that returns one chord for the whole song scores perfectly. Correctness needs
+reference sheets to compare against, and `backend/tools/` does that:
+
+```bat
+cd backend
+python -m tools.chordify_reference ..\songs -o tools\reference.json
+python -m tools.tune_chords tools\reference.json --trials 500 --report
+```
+
+The first reads verified Chordify PDF exports into a beat-indexed reference
+(each export names the YouTube video it came from, so it is tied to the exact
+audio). The second searches the fusion and cleanup settings with Optuna and
+reports duration-weighted agreement, holding out a third of the songs.
+
+It is fast because it never re-runs the engines: every beat's per-engine
+prediction is stored on `03_chords.json`, so a trial re-fuses stored numbers in
+milliseconds. Only fusion and cleanup are reachable this way — the beat grid,
+the detected key and the engines' own constants are baked into those labels.
+
+The current defaults came from 15 verified songs: **72.0% → 77.7%** agreement at
+majmin level, 74.1% → 78.1% on held-out songs, with every song improving. Most
+of that is the engine weights alone. Note that the search will always try to
+switch cleanup off, because the objective cannot see flicker — that buys about
+1.7 points while pushing short runs from 0% to ~20%, which is why `--report`
+prints the noise metrics next to the accuracy. Judge both.
 
 ### Layout
 
