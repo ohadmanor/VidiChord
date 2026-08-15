@@ -37,6 +37,37 @@ import { AudioService } from './services/audio.service';
 
 const FUSION_STORAGE_KEY = 'vidiChordFusionConfig';
 const CLEANUP_STORAGE_KEY = 'vidiChordCleanupConfig';
+const TUNING_VERSION_KEY = 'vidiChordTuningVersion';
+
+/**
+ * Bump whenever the shipped chord-detection defaults change.
+ *
+ * The stored tuning is sent to the backend on every run, so it wins over the
+ * backend's own defaults. Without this stamp anyone who had opened the app
+ * before an upgrade would keep the old values forever - seeing stale numbers
+ * in Settings and, worse, silently still getting the old behaviour.
+ */
+const TUNING_VERSION = '1.0.4';
+
+/**
+ * Overlay stored tuning on the defaults, one level into the nested groups.
+ *
+ * A plain spread would replace a whole group (`emission_weights` and friends)
+ * with the stored copy, so any field added to that group since would come back
+ * undefined and reach the backend as a missing weight.
+ */
+function mergeTuning<T extends object>(defaults: T, stored: any): T {
+  if (!stored || typeof stored !== 'object') return defaults;
+  const merged: any = { ...defaults };
+  for (const [key, value] of Object.entries(stored)) {
+    const base = (defaults as any)[key];
+    merged[key] =
+      base && typeof base === 'object' && value && typeof value === 'object'
+        ? { ...base, ...value }
+        : value;
+  }
+  return merged;
+}
 
 /**
  * What to say when the paused run's own words are not to be had.
@@ -190,6 +221,17 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   private restoreTuning(): void {
+    // Tuning saved before the current defaults were measured is discarded
+    // rather than merged: keeping it would quietly override the new defaults
+    // on every run. Deliberate edits are worth preserving, a stale copy of a
+    // superseded default is not.
+    if (localStorage.getItem(TUNING_VERSION_KEY) !== TUNING_VERSION) {
+      localStorage.removeItem(FUSION_STORAGE_KEY);
+      localStorage.removeItem(CLEANUP_STORAGE_KEY);
+      localStorage.setItem(TUNING_VERSION_KEY, TUNING_VERSION);
+      return;
+    }
+
     for (const [key, target] of [
       [FUSION_STORAGE_KEY, 'fusion'],
       [CLEANUP_STORAGE_KEY, 'cleanup'],
@@ -197,9 +239,7 @@ export class AppComponent implements OnInit, OnDestroy {
       const stored = localStorage.getItem(key);
       if (!stored) continue;
       try {
-        // Merge over the defaults so a stored config from an older version
-        // does not leave new fields undefined.
-        (this as any)[target] = { ...(this as any)[target], ...JSON.parse(stored) };
+        (this as any)[target] = mergeTuning((this as any)[target], JSON.parse(stored));
       } catch {
         localStorage.removeItem(key);
       }
@@ -209,6 +249,7 @@ export class AppComponent implements OnInit, OnDestroy {
   private persistTuning(): void {
     localStorage.setItem(FUSION_STORAGE_KEY, JSON.stringify(this.fusion));
     localStorage.setItem(CLEANUP_STORAGE_KEY, JSON.stringify(this.cleanup));
+    localStorage.setItem(TUNING_VERSION_KEY, TUNING_VERSION);
   }
 
   get isRunning(): boolean {
