@@ -354,6 +354,7 @@ backend/
     chords/                  beats, engines, fusion, cleanup, vocabulary
     sheet/                   layout, instrumentals, bar charts, export
     vendor/essentia/         bundled binaries
+  tools/                     reference parsing and chord-config tuning
 frontend/
   src/app/
     models/artifacts.ts      mirrors the backend schemas
