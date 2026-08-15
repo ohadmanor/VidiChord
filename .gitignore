@@ -30,3 +30,5 @@ backend/config.json
 
 # --- Test fixtures: audio is large, keep it out of git ---
 backend/tests/fixtures/audio/
+
+*.pdf

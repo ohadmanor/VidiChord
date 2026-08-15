@@ -9,4 +9,4 @@ it and writing exactly one of its own (see :mod:`vidichord.project`):
     4. :mod:`vidichord.pipeline.stage4_sheet`   lyrics x chords -> song sheet
 """
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"

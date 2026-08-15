@@ -46,23 +46,37 @@ _QUALITIES_PER_ROOT = len(QUALITIES)
 
 
 class EmissionWeights(BaseModel):
-    """How much to trust each engine when it agrees with a candidate chord."""
+    """How much to trust each engine when it agrees with a candidate chord.
 
-    essentia_match: float = 0.50
-    librosa_match: float = 0.90
-    madmom_match: float = 0.50
+    These are tuned values, not guesses: they were fitted against 15
+    hand-verified reference sheets by re-fusing stored engine predictions
+    (see ``backend/tools/tune_chords.py``). The headline finding is that
+    madmom's pretrained CRF is worth far more than the other two - dropping
+    librosa and Essentia to near-abstention is +4 points of chord accuracy on
+    its own. Both still contribute: they break madmom's ties, and librosa is
+    the only source of the bass notes behind slash chords.
+    """
+
+    essentia_match: float = 0.05
+    librosa_match: float = 0.05
+    madmom_match: float = 0.73
     #: Probability mass given to "no chord" when an engine reports silence.
-    none_state_bias: float = 0.80
+    none_state_bias: float = 0.47
 
 
 class TransitionWeights(BaseModel):
-    """How likely the chord is to stay put or move to a related chord."""
+    """How likely the chord is to stay put or move to a related chord.
 
-    self_transition: float = 0.75
-    same_root_diff_quality: float = 0.05
-    circle_of_fifths_dist_1: float = 0.70
-    circle_of_fifths_dist_2: float = 0.40
-    unrelated_chord: float = 0.001
+    Also fitted. The tuning drove every "change chord" weight low and close
+    together, which says the transition model earns its keep by preferring to
+    hold a chord rather than by knowing which chord comes next.
+    """
+
+    self_transition: float = 0.70
+    same_root_diff_quality: float = 0.0013
+    circle_of_fifths_dist_1: float = 0.0012
+    circle_of_fifths_dist_2: float = 0.096
+    unrelated_chord: float = 0.000053
 
 
 class KeyPrior(BaseModel):

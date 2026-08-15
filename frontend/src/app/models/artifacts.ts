@@ -253,18 +253,20 @@ export interface CleanupConfig {
 }
 
 export const DEFAULT_FUSION: FusionConfig = {
+  // Keep in step with EmissionWeights/TransitionWeights in
+  // backend/vidichord/chords/fusion.py - these are fitted values.
   emission_weights: {
-    essentia_match: 0.5,
-    librosa_match: 0.9,
-    madmom_match: 0.5,
-    none_state_bias: 0.8,
+    essentia_match: 0.05,
+    librosa_match: 0.05,
+    madmom_match: 0.73,
+    none_state_bias: 0.47,
   },
   transition_probabilities: {
-    self_transition: 0.75,
-    same_root_diff_quality: 0.05,
-    circle_of_fifths_dist_1: 0.7,
-    circle_of_fifths_dist_2: 0.4,
-    unrelated_chord: 0.001,
+    self_transition: 0.7,
+    same_root_diff_quality: 0.0013,
+    circle_of_fifths_dist_1: 0.0012,
+    circle_of_fifths_dist_2: 0.096,
+    unrelated_chord: 0.000053,
   },
   key_prior: {
     enabled: true,
