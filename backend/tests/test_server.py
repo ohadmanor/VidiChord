@@ -77,6 +77,41 @@ class TestLibrary:
     def test_unknown_song_is_404(self, client):
         assert client.get("/api/songs/nope").status_code == 404
 
+    def test_a_run_paused_for_lyrics_says_so_without_its_job(self, client, app_and_library):
+        """The pause has to outlive the job that raised it.
+
+        Jobs are held in memory, so restarting the server - or simply running
+        fifty more - forgets that a song is waiting to be told what its lyrics
+        are. The app finds those songs again by reading the stage back, which
+        only works if the state and the reason both survive on disk.
+        """
+        from vidichord.models import StageState
+
+        _app, _library, project = app_and_library
+        project.update_stage(
+            2, StageState.NEEDS_INPUT, message="No lyrics found for this song."
+        )
+
+        body = client.get(f"/api/songs/{SONG_ID}").json()
+
+        assert body["job"] is None
+        assert body["stages"]["lyrics"] == "needs_input"
+        assert body["manifest"]["stages"]["lyrics"]["message"] == (
+            "No lyrics found for this song."
+        )
+
+    def test_a_paused_stage_is_not_reported_done_because_its_file_exists(
+        self, client, app_and_library
+    ):
+        """A stale 02_lyrics.json from an earlier run must not hide the pause."""
+        from vidichord.models import StageState
+
+        _app, _library, project = app_and_library
+        assert project.has(LyricsDoc)
+        project.update_stage(2, StageState.NEEDS_INPUT, message="No lyrics found.")
+
+        assert client.get("/api/songs").json()[0]["stages"]["lyrics"] == "needs_input"
+
     def test_delete_removes_the_folder(self, client, app_and_library):
         _app, _library, project = app_and_library
         assert client.delete(f"/api/songs/{SONG_ID}").status_code == 204
@@ -280,6 +315,15 @@ class TestReview:
             f"/api/songs/{SONG_ID}/lyrics/choice",
             json={"choice": "ai", "review": True},
         )
+        assert recorder.calls[-1][1] == (2, 3)
+
+    def test_an_instrumental_choice_is_accepted_without_lyrics(self, client, recorder):
+        # The whole point of the choice is that there are no lyrics to send.
+        response = client.post(
+            f"/api/songs/{SONG_ID}/lyrics/choice",
+            json={"choice": "instrumental", "review": True},
+        )
+        assert response.status_code == 200
         assert recorder.calls[-1][1] == (2, 3)
 
     def test_saving_chords_for_review_leaves_the_sheet_alone(self, client):

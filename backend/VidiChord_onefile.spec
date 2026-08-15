@@ -152,11 +152,53 @@ hiddenimports = [
 for package in ("vidichord", "librosa", "faster_whisper", "yt_dlp"):
     hiddenimports += collect_submodules(package)
 
-for package in ("librosa", "faster_whisper", "_soundfile_data"):
+# yt-dlp and yt_dlp_ejs carry the JavaScript that answers YouTube's signature
+# challenges, and read it back with importlib.resources - so it has to be
+# bundled as data or every download is refused in the frozen build.
+for package in ("librosa", "faster_whisper", "_soundfile_data", "yt_dlp", "yt_dlp_ejs"):
     try:
         datas += collect_data_files(package)
     except Exception as error:  # a missing optional package must not stop the build
         print(f"*** Note: no data files collected for {package}: {error}")
+
+# That loop cannot report the failure that matters: collect_data_files returns
+# an empty list for a package that is not installed rather than raising, so a
+# venv predating yt-dlp-ejs would build a green exe that refuses every YouTube
+# download - the exact bug this release fixes. Nothing else catches it either:
+# the test suite never builds a bundle, and the start-up check only asks the
+# exe for /api/config. So check here, where it can still stop the build.
+#
+# The two packages must also agree: yt-dlp verifies the solver script's version
+# and hash against its own vendored manifest and silently discards a mismatch,
+# leaving Node with no script to run.
+try:
+    import yt_dlp_ejs
+    from yt_dlp.extractor.youtube.jsc._builtin import vendor as _yt_dlp_vendor
+except ImportError as error:
+    raise SystemExit(
+        f"*** {error}\n"
+        "*** yt-dlp-ejs supplies the JavaScript that signs YouTube download\n"
+        "*** links; without it the exe cannot download anything from YouTube.\n"
+        "*** Run backend\\setup.bat, or: .venv\\Scripts\\pip install -r requirements.txt"
+    )
+
+if yt_dlp_ejs.version.split(".")[:2] != _yt_dlp_vendor.VERSION.split(".")[:2]:
+    raise SystemExit(
+        f"*** yt-dlp-ejs {yt_dlp_ejs.version} does not match the {_yt_dlp_vendor.VERSION}\n"
+        "*** that this yt-dlp expects, so its solver script would be rejected at\n"
+        "*** run time and YouTube downloads would fail. Reinstall the pair together:\n"
+        "***   .venv\\Scripts\\pip install -U yt-dlp yt-dlp-ejs"
+    )
+
+# collect_data_files yields (source file, destination *directory*), so the
+# filename to test is the first element.
+_solver_scripts = [source for source, _ in datas if str(source).endswith(".js")]
+if not _solver_scripts:
+    raise SystemExit(
+        "*** No JavaScript solver scripts were collected, so the exe could not\n"
+        "*** sign a YouTube download link. Expected them from yt_dlp and yt_dlp_ejs."
+    )
+print(f"*** Bundling yt-dlp-ejs {yt_dlp_ejs.version} ({len(_solver_scripts)} solver scripts).")
 
 for package in ("ctranslate2", "onnxruntime", "av"):
     try:

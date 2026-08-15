@@ -23,8 +23,10 @@ import os
 if os.path.isdir("ffmpeg"):
     datas.append(("ffmpeg", "ffmpeg"))
 
-# librosa and faster-whisper ship data files their loaders read at runtime.
-for package in ("librosa", "faster_whisper"):
+# librosa and faster-whisper ship data files their loaders read at runtime, and
+# yt-dlp and yt_dlp_ejs ship the JavaScript that answers YouTube's signature
+# challenges - without it downloads are refused in the frozen build.
+for package in ("librosa", "faster_whisper", "yt_dlp", "yt_dlp_ejs"):
     try:
         datas += collect_data_files(package)
     except Exception:

@@ -7,6 +7,7 @@ import {
   Job,
   LyricsDoc,
   SheetDoc,
+  SongDetail,
   SongSummary,
   SourceDoc,
 } from '../models/artifacts';
@@ -68,7 +69,7 @@ export class ApiService {
     return this.request<SongSummary[]>('/api/songs');
   }
 
-  getSong(songId: string): Promise<SongSummary & { job: Job | null }> {
+  getSong(songId: string): Promise<SongDetail> {
     return this.request(`/api/songs/${encodeURIComponent(songId)}`);
   }
 
@@ -187,11 +188,15 @@ export class ApiService {
   /** Resume a run that paused because no lyrics could be found. */
   submitLyricsChoice(
     songId: string,
-    choice: 'ai' | 'manual',
+    choice: 'ai' | 'manual' | 'instrumental',
     options: {
       lyrics?: string;
       language?: string | null;
       fusion?: FusionConfig;
+      // Sent for the same reason the re-run calls send it: resuming re-fuses
+      // the chords, and without the user's tuning they come back different
+      // from the run they were looking at.
+      cleanup?: CleanupConfig;
       review?: boolean;
     } = {}
   ): Promise<Job> {

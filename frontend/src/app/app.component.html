@@ -128,17 +128,28 @@
 
     <!-- ======================= Lyrics choice ======================= -->
     <div class="glass-panel centred" *ngIf="showChoiceModal">
-      <h2>No lyrics found</h2>
-      <p class="muted">{{ job?.message }}</p>
+      <div class="panel-header">
+        <h2>{{ choiceIsVoluntary ? 'Replace the lyrics' : 'No lyrics found' }}</h2>
+        <button class="icon-btn" (click)="dismissChoice()" title="Close">
+          <svg lucideX></svg>
+        </button>
+      </div>
+      <p class="muted" *ngIf="!choiceIsVoluntary">{{ choiceReason }}</p>
+      <p class="muted" *ngIf="choiceIsVoluntary">
+        Paste the words you want and they will be timed against the recording, replacing
+        whatever is there now - or mark the song instrumental to drop its lyrics.
+      </p>
 
       <div class="choice-grid">
-        <div class="choice-card">
+        <div class="choice-card" *ngIf="!choiceIsVoluntary">
           <h3>Use the transcript</h3>
           <p class="muted">
             Keep what Whisper heard. Fast, but the words will contain mistakes and the
             verse/chorus structure will only be a guess.
           </p>
-          <button class="btn btn-primary" (click)="submitChoice('ai')">Use transcript</button>
+          <button class="btn btn-primary" (click)="submitChoice('ai')" [disabled]="choiceSubmitting">
+            Use transcript
+          </button>
         </div>
 
         <div class="choice-card">
@@ -147,9 +158,29 @@
             Paste the real lyrics and they will be aligned to the audio. Leave blank lines
             between verses, or mark sections with [Chorus].
           </p>
-          <textarea [(ngModel)]="manualLyrics" placeholder="Paste lyrics here..."></textarea>
-          <button class="btn btn-primary" (click)="submitChoice('manual')" [disabled]="!manualLyrics.trim()">
-            Align pasted lyrics
+          <!-- dir="auto" so Hebrew reads right-to-left from the first word typed. -->
+          <textarea [(ngModel)]="manualLyrics" dir="auto" placeholder="Paste lyrics here..."></textarea>
+          <button
+            class="btn btn-primary"
+            (click)="submitChoice('manual')"
+            [disabled]="choiceSubmitting || !manualLyrics.trim()"
+          >
+            {{ choiceSubmitting ? 'Starting...' : 'Align pasted lyrics' }}
+          </button>
+        </div>
+
+        <div class="choice-card">
+          <h3>It's instrumental</h3>
+          <p class="muted">
+            Nobody is singing here. Skip the lyrics entirely and build a
+            chords-only sheet of bar charts.
+          </p>
+          <button
+            class="btn btn-secondary"
+            (click)="submitChoice('instrumental')"
+            [disabled]="choiceSubmitting"
+          >
+            No lyrics &mdash; chords only
           </button>
         </div>
       </div>
@@ -237,10 +268,28 @@
             Correct anything wrong on either side, then sync to build the sheet.
           </span>
           <span class="spacer"></span>
-          <button class="btn btn-secondary" (click)="rerun(2)" title="Transcribe and look up the lyrics again">
+          <button
+            class="btn btn-secondary"
+            (click)="openLyricsPaste()"
+            [disabled]="syncing"
+            title="Paste the real lyrics and align them to the audio"
+          >
+            Paste lyrics
+          </button>
+          <button
+            class="btn btn-secondary"
+            (click)="rerun(2)"
+            [disabled]="syncing"
+            title="Transcribe and look up the lyrics again"
+          >
             Re-run lyrics
           </button>
-          <button class="btn btn-secondary" (click)="rerun(3)" title="Extract the chords again with the current tuning">
+          <button
+            class="btn btn-secondary"
+            (click)="rerun(3)"
+            [disabled]="syncing"
+            title="Extract the chords again with the current tuning"
+          >
             Re-run chords
           </button>
           <button class="btn btn-primary" (click)="sync()" [disabled]="syncing || !lyrics || !chords">

@@ -23,6 +23,7 @@ import re
 from ..lyrics import align as align_mod
 from ..lyrics import providers, structure
 from ..lyrics.normalize import normalize_word
+from ..lyrics import whisper_engine
 from ..lyrics.whisper_engine import WhisperEngine
 from ..models import LyricLine, LyricsDoc, LyricsSource, SourceDoc, Word
 from . import NeedsUserInput, StageContext
@@ -61,25 +62,54 @@ _MAX_GAP_TO_ABSORB = 4.0
 # ---------------------------------------------------------------------------
 
 
-def _load_transcript(context: StageContext) -> tuple[str, list[dict]] | None:
+def _load_transcript(context: StageContext) -> tuple[str, list[dict], bool] | None:
+    """A cached transcript, if one exists that this build still trusts.
+
+    The detector that chose the language is recorded alongside it, because a
+    transcript is only as good as that choice: the wrong language means the
+    wrong model transcribed the song, and no amount of re-running the later
+    steps recovers from it. When the detector changes, everything it decided
+    has to be decided again - so a transcript written by a different one, or
+    by a build too old to say which, is discarded rather than reused.
+    """
     path = context.project.root / TRANSCRIPT_FILENAME
     if not path.is_file():
         return None
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-        return data.get("language", ""), data.get("segments", [])
     except (OSError, ValueError):
         return None
 
+    if data.get("detector") != whisper_engine.DETECTION_MODEL:
+        return None
+    # Transcripts from before the flag existed default to True: a cache must
+    # never be what quietly declares a song instrumental.
+    return (
+        data.get("language", ""),
+        data.get("segments", []),
+        bool(data.get("vocals_detected", True)),
+    )
 
-def _save_transcript(context: StageContext, language: str, segments: list[dict]) -> None:
+
+def _save_transcript(
+    context: StageContext, language: str, segments: list[dict], vocals_detected: bool
+) -> None:
     path = context.project.root / TRANSCRIPT_FILENAME
     with path.open("w", encoding="utf-8") as handle:
-        json.dump({"language": language, "segments": segments}, handle, ensure_ascii=False)
+        json.dump(
+            {
+                "detector": whisper_engine.DETECTION_MODEL,
+                "language": language,
+                "segments": segments,
+                "vocals_detected": vocals_detected,
+            },
+            handle,
+            ensure_ascii=False,
+        )
 
 
-def _transcribe(context: StageContext) -> tuple[str, list[dict]]:
+def _transcribe(context: StageContext) -> tuple[str, list[dict], bool]:
     """Transcribe the audio, reusing a cached transcript when one exists."""
     requested = context.param("language")
 
@@ -108,8 +138,8 @@ def _transcribe(context: StageContext) -> tuple[str, list[dict]]:
         on_progress=lambda message: context.report(message, None),
     )
     segments = transcript.as_dicts()
-    _save_transcript(context, transcript.language, segments)
-    return transcript.language, segments
+    _save_transcript(context, transcript.language, segments, transcript.vocals_detected)
+    return transcript.language, segments, transcript.vocals_detected
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +208,11 @@ def _lookup(
             # whether this is the same song at all.
             match = providers.fetch_lrclib(title)
         if match is not None:
+            # Overlap with the transcript is required, never waived: a title
+            # match with nothing sung behind it is how an instrumental cover
+            # of a known song used to come back wearing the original's lyrics.
             overlap = providers.check_overlap(transcript_text, match.lyrics)
-            if overlap >= _MIN_OVERLAP_FILENAME or not transcript_text.strip():
+            if overlap >= _MIN_OVERLAP_FILENAME:
                 context.report(f"Found '{match.title}' by {match.artist}.", None)
                 return match
             context.report(f"Rejected weak match ({overlap:.0%} overlap).", None)
@@ -355,6 +388,62 @@ def _lrc_line_times(lrc: str, line_count: int) -> list[float] | None:
 # ---------------------------------------------------------------------------
 
 
+def _has_words(segments: list[dict]) -> bool:
+    return any(str(segment.get("text", "")).strip() for segment in segments)
+
+
+def _publish(project, document: LyricsDoc) -> None:
+    """Write the lyrics document and echo its identity onto the manifest."""
+    project.write(document)
+    manifest = project.read_manifest()
+    manifest.title = document.title or manifest.title
+    manifest.artist = document.artist or manifest.artist
+    manifest.language = document.language
+    project.write_manifest(manifest)
+
+
+def _known_language(context: StageContext) -> str:
+    """The song's language without transcribing anything to learn it.
+
+    Marking a song instrumental means its words will never be used, so paying
+    minutes of transcription just to fill in the language field would be the
+    wrong trade. An override, a cached transcript or an earlier run usually
+    knows it already; failing all three, the field's own default stands.
+    """
+    requested = context.param("language")
+    if requested:
+        return str(requested)
+    cached = _load_transcript(context)
+    if cached is not None and cached[0]:
+        return cached[0]
+    previous = context.project.read_optional(LyricsDoc)
+    if previous is not None and previous.language:
+        return previous.language
+    return "en"
+
+
+def _finish_instrumental(
+    context: StageContext, language: str, title: str, artist: str, reason: str
+) -> None:
+    """Complete the stage with no lyric lines at all.
+
+    An empty lines list is a first-class result, not a failure: stage 4 reads
+    a song with no sung bars as one long instrumental and renders bar charts
+    for all of it. Nothing downstream needs a lyric to exist.
+    """
+    context.report(reason, 90.0)
+    _publish(
+        context.project,
+        LyricsDoc(
+            language=language or "en",
+            source=LyricsSource.INSTRUMENTAL,
+            title=title,
+            artist=artist,
+        ),
+    )
+    context.report("Instrumental - the sheet will be chords only.", 100.0)
+
+
 def run(context: StageContext) -> None:
     project = context.project
     source = project.read_optional(SourceDoc) or SourceDoc()
@@ -362,15 +451,26 @@ def run(context: StageContext) -> None:
     if not project.audio_path.is_file():
         raise RuntimeError("Stage 1 must run before lyrics can be extracted")
 
+    choice = context.param("choice", "auto")
+    title, artist = source.title, source.artist
+
+    if choice == "instrumental":
+        _finish_instrumental(
+            context,
+            _known_language(context),
+            title,
+            artist,
+            "Marked instrumental - skipping the lyrics search.",
+        )
+        return
+
     context.report("Transcribing audio...", 5.0)
-    language, segments = _transcribe(context)
+    language, segments, vocals_detected = _transcribe(context)
     raw_words = align_mod.flatten_words(segments)
 
-    choice = context.param("choice", "auto")
     official: str | None = None
     lrc: str | None = None
     lyrics_source = LyricsSource.RAW
-    title, artist = source.title, source.artist
 
     if choice == "manual":
         official = context.param("lyrics") or ""
@@ -393,10 +493,22 @@ def run(context: StageContext) -> None:
             title = match.title or title
             artist = artist if artist and artist != "Unknown" else match.artist
         else:
+            # Nothing found online. That is always the user's call to make,
+            # never decided here: only they know whether the song has words
+            # at all. When the audio itself suggests there are none, say so -
+            # a track the VAD called silent has a transcript of hallucinated
+            # filler, and "use the transcript" should be picked knowing that.
+            if not _has_words(segments) or not vocals_detected:
+                hint = (
+                    "No lyrics were found online, and no clear vocals were "
+                    "detected - this song may be instrumental. "
+                )
+            else:
+                hint = "No lyrics were found online. "
             raise NeedsUserInput(
-                "No lyrics found for this song. Transcribe with Whisper alone, "
-                "or paste the lyrics.",
-                options=["ai", "manual"],
+                hint + "Continue with the transcript as is, paste the lyrics, "
+                "or mark the song instrumental.",
+                options=["ai", "manual", "instrumental"],
             )
 
     if official and official.strip():
@@ -409,7 +521,23 @@ def run(context: StageContext) -> None:
         lyrics_source = LyricsSource.RAW
 
     if not lines:
-        raise RuntimeError("No lyrics could be produced for this song")
+        if choice == "manual":
+            # Only section tags or blank space survived parsing. The user has
+            # just said the song HAS lyrics; quietly marking it instrumental
+            # would overrule them, so ask again instead.
+            raise NeedsUserInput(
+                "The pasted text contained no lyric lines. Paste the words "
+                "themselves, use the transcript, or mark the song instrumental.",
+                options=["ai", "manual", "instrumental"],
+            )
+        # "Use the transcript" on a track Whisper heard nothing in, or found
+        # lyrics that parsed to nothing. There is nothing to time, which is an
+        # instrumental result, not an error to die on.
+        _finish_instrumental(
+            context, language, title, artist,
+            "No lyric lines could be produced - finishing as instrumental.",
+        )
+        return
 
     context.report(f"Timing {len(lines)} lines...", 75.0)
     lrc_times = _lrc_line_times(lrc, len(lines)) if lrc else None
@@ -429,13 +557,7 @@ def run(context: StageContext) -> None:
         sections=sections,
         lines=built,
     )
-    project.write(document)
-
-    manifest = project.read_manifest()
-    manifest.title = title or manifest.title
-    manifest.artist = artist or manifest.artist
-    manifest.language = document.language
-    project.write_manifest(manifest)
+    _publish(project, document)
 
     context.report(
         f"{len(built)} lines across {len(sections)} sections "

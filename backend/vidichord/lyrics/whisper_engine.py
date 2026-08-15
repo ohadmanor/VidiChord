@@ -3,19 +3,28 @@
 The old implementation transcribed a Hebrew song twice: once end-to-end with
 ``large-v3``, then again with the Hebrew-tuned model once the first pass
 revealed the language. Transcription is the slowest thing the pipeline does, so
-here a tiny model identifies the language first and only the right large model
+here a small model identifies the language first and only the right large model
 is ever run over the full audio.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-#: Cheap model used purely to identify the language.
-DETECTION_MODEL = "tiny"
+#: Small model used purely to identify the language.
+#:
+#: Not "tiny": on a 1970 Hebrew recording tiny never once ranked Hebrew first
+#: across the whole song, scattering its votes over English, Spanish, Catalan
+#: and Greek, and the song was transcribed as Spanish gibberish - which then
+#: found no lyrics and stopped the run. "small" reads the same track as Hebrew
+#: at 3.39 against 0.32 for its nearest rival. It costs about six seconds
+#: against tiny's one, next to a transcription measured in minutes, and a
+#: wrong answer here wastes all of that on the wrong model.
+DETECTION_MODEL = "small"
 
 #: Hebrew is served by a community model tuned on Hebrew speech; everything
 #: else uses large-v3-turbo. Turbo keeps large-v3's encoder but has 4 decoder
@@ -89,10 +98,34 @@ class Segment:
         }
 
 
+def _window_votes(language: str, probability: float, rest: list) -> list[tuple[str, float]]:
+    """The (language, weight) votes one detection window casts.
+
+    faster-whisper returns the whole probability distribution alongside its
+    pick, but has spelled it as both a mapping and a list of pairs across
+    releases - and older ones do not return it at all. Whichever arrives, the
+    full distribution is worth far more than the winner alone; the winner is
+    the fallback for versions that offer nothing else.
+    """
+    distribution = rest[0] if rest else None
+    if isinstance(distribution, dict):
+        return list(distribution.items())
+    if isinstance(distribution, (list, tuple)):
+        pairs = [item for item in distribution if isinstance(item, (list, tuple)) and len(item) == 2]
+        if pairs:
+            return [(str(name), float(weight)) for name, weight in pairs]
+    return [(language, probability)]
+
+
 @dataclass
 class Transcript:
     language: str
     segments: list[Segment]
+    #: False when the VAD pass heard no vocals anywhere in the track - the
+    #: strongest signal this engine has that a song is instrumental. The
+    #: segments may still hold text in that case: the no-VAD fallback decodes
+    #: the whole file, and Whisper pointed at pure music tends to hallucinate.
+    vocals_detected: bool = True
 
     @property
     def text(self) -> str:
@@ -160,6 +193,12 @@ class WhisperEngine:
         that scores highly on a single unrepresentative window. On the Hebrew
         test track that is the difference between Hebrew (0.17 + 0.68 + 0.50)
         and the Arabic its instrumental passage reads as (0.76).
+
+        Every window contributes its whole distribution, not just the language
+        that topped it. Music is noisy enough that the right answer often sits
+        second or third in any one window while still being the only language
+        present in all of them, and counting winners alone throws that away -
+        it hands the song to whichever wrong language happened to spike.
         """
         model = self._load(DETECTION_MODEL)
 
@@ -176,8 +215,9 @@ class WhisperEngine:
                 # usable reading; a sliver does not.
                 if len(window) < span // 2:
                     break
-                language, probability, *_ = model.detect_language(window)
-                scores[language] = scores.get(language, 0.0) + probability
+                language, probability, *rest = model.detect_language(window)
+                for name, weight in _window_votes(language, probability, rest):
+                    scores[name] = scores.get(name, 0.0) + weight
 
             if scores:
                 return max(scores, key=lambda name: scores[name])
@@ -207,7 +247,10 @@ class WhisperEngine:
         """
         if language is None:
             if on_progress:
-                on_progress("Detecting language...")
+                # The detector is fetched from Hugging Face the first time it
+                # is asked for - about half a gigabyte, with nothing on screen
+                # while it arrives unless the wait is named here.
+                on_progress("Detecting language (downloads the detector on first run)...")
             language = self.detect_language(audio_path)
             if on_progress:
                 on_progress(f"Detected language: {language}")
@@ -248,6 +291,10 @@ class WhisperEngine:
         raw_segments, info = self._start_transcription(model, audio_path, options)
         segments = _collect_segments(raw_segments, on_progress)
 
+        # Judged before the fallback below runs: whatever that pass decodes
+        # out of a track the VAD called silent is suspect by construction.
+        vocals_detected = bool(segments)
+
         if not segments and _USE_VAD:
             # Silero heard no vocals at all - quiet singing it cannot follow,
             # or a genuine instrumental. Decode everything, as the pre-VAD
@@ -259,7 +306,11 @@ class WhisperEngine:
             raw_segments, info = self._start_transcription(model, audio_path, options)
             segments = _collect_segments(raw_segments, on_progress)
 
-        return Transcript(language=language or info.language, segments=segments)
+        return Transcript(
+            language=language or info.language,
+            segments=segments,
+            vocals_detected=vocals_detected,
+        )
 
     @staticmethod
     def _start_transcription(model, audio_path: str, options: dict[str, Any]):

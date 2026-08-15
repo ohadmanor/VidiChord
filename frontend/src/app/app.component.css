@@ -224,6 +224,13 @@
   font-weight: 600;
 }
 
+/* A centring panel sizes its children to their contents, which would pull a
+   header's close button in beside the title instead of out to the edge. */
+.centred .panel-header {
+  align-self: stretch;
+  text-align: left;
+}
+
 .panel-header {
   display: flex;
   align-items: center;
@@ -370,12 +377,14 @@ textarea:focus {
 
 /* --------------------------------------------------------- lyrics choice */
 
+/* Two cards when opened deliberately, three when a run stopped to ask -
+   auto-fit keeps either count filling the row without an empty cell. */
 .choice-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
   width: 100%;
-  max-width: 820px;
+  max-width: 1100px;
   margin-top: 12px;
   text-align: left;
 }

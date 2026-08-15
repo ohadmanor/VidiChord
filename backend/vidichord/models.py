@@ -118,6 +118,8 @@ class LyricsSource(str, Enum):
     CACHE = "cache"
     #: No official lyrics found - the raw transcript is used as-is.
     RAW = "raw"
+    #: The song has no lyrics at all; the sheet is chords-only bar charts.
+    INSTRUMENTAL = "instrumental"
 
 
 #: Hebrew block, including presentation forms.

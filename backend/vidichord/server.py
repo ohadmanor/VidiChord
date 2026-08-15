@@ -69,7 +69,8 @@ class CreateSongRequest(BaseModel):
 
 
 class LyricsChoiceRequest(BaseModel):
-    #: "ai" to accept the transcript, "manual" to use pasted lyrics.
+    #: "ai" to accept the transcript, "manual" to use pasted lyrics, and
+    #: "instrumental" for a song that has no lyrics to find.
     choice: str = "ai"
     lyrics: str = ""
     language: str | None = None
@@ -310,8 +311,11 @@ def create_app() -> FastAPI:
     @app.post("/api/songs/{song_id}/lyrics/choice")
     def lyrics_choice(song_id: str, request: LyricsChoiceRequest) -> dict:
         """Resume a run that paused because no lyrics could be found."""
-        if request.choice not in ("ai", "manual"):
-            raise HTTPException(status_code=400, detail="choice must be 'ai' or 'manual'")
+        if request.choice not in ("ai", "manual", "instrumental"):
+            raise HTTPException(
+                status_code=400,
+                detail="choice must be 'ai', 'manual' or 'instrumental'",
+            )
         if request.choice == "manual" and not request.lyrics.strip():
             raise HTTPException(status_code=400, detail="No lyrics provided")
 

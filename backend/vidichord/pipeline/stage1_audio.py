@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -143,6 +144,69 @@ def cookie_options(settings: Settings | None = None) -> dict:
     return {}
 
 
+#: Engines yt-dlp can run YouTube's player JavaScript in, best first.
+#:
+#: Streaming URLs carry an "n" parameter that has to be descrambled by running
+#: the player's own code, and YouTube throttles or refuses requests that get it
+#: wrong. yt-dlp used to do this in a Python interpreter of its own; since
+#: 2026.07 it shells out to a real engine and enables *only* Deno by default,
+#: so a machine with Node - which the README has always recommended, and which
+#: is far more commonly installed - silently lost the ability to answer the
+#: challenge. Naming every supported engine lets yt-dlp use whichever one is
+#: actually on PATH; the rest are reported unavailable and ignored.
+_JS_RUNTIMES = ("node", "deno", "bun", "quickjs")
+
+
+def js_runtime_options() -> dict:
+    """yt-dlp options letting it use any JavaScript engine present."""
+    return {"js_runtimes": {name: {} for name in _JS_RUNTIMES}}
+
+
+#: yt-dlp's way of saying it found no engine to run the player's code in.
+_JS_WARNING_SIGNS = (
+    "javascript runtime",
+    "signature solving failed",
+    "challenge solving failed",
+)
+
+#: What to say instead. yt-dlp cannot bundle an engine and neither can a
+#: PyInstaller build - it is a separate program - so the remedy is to put one
+#: beside the app, where the frozen build already looks for cookies.
+NO_JS_ENGINE = (
+    "YouTube needs a JavaScript engine to unscramble its download links, and "
+    "none was found. Install Node.js, or put node.exe beside VidiChord.exe. "
+    "Songs added from a file need none of this."
+)
+
+
+#: How many times to ask YouTube for the media before believing the refusal.
+#:
+#: Google's media servers reject a large share of requests with a bare 403 for
+#: no lasting reason - measured at roughly half of all attempts on one video,
+#: with the very next attempt on a freshly extracted URL succeeding. yt-dlp
+#: does not retry these itself: a 403 is a client error, so it stops. Retrying
+#: the whole extraction is the only thing that clears it, and it is quick - a
+#: refused attempt costs under three seconds, so enough of them to make a run
+#: of bad luck unlikely still fails fast when the refusal is the real kind.
+_DOWNLOAD_ATTEMPTS = 8
+
+#: Seconds to wait between those attempts.
+_RETRY_PAUSE = 1.5
+
+#: Signatures of a refusal that a fresh attempt is likely to get past. A 403
+#: from the media host is transient; the sign-in and rate-limit refusals in
+#: ``_BLOCKED_SIGNS`` are not, and must not be retried into a long stall.
+_TRANSIENT_SIGNS = ("403", "forbidden", "unable to download video data")
+
+
+def _is_transient(error: Exception) -> bool:
+    """True if ``error`` looks like the 403 that simply retrying gets past."""
+    lowered = str(error).lower()
+    if any(sign in lowered for sign in _BLOCKED_SIGNS):
+        return False
+    return any(sign in lowered for sign in _TRANSIENT_SIGNS)
+
+
 #: First line of every "YouTube would not identify us" explanation. Short and
 #: unmistakable, because it is the one thing the user has to act on - the
 #: paragraphs after it are detail.
@@ -263,6 +327,7 @@ def probe(url: str, settings: Settings | None = None) -> dict:
         "no_warnings": True,
         "logger": logger,
     }
+    options.update(js_runtime_options())
     options.update(cookie_options(settings))
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -294,7 +359,15 @@ class _ProgressLogger:
         pass
 
     def warning(self, message: str) -> None:
-        self._report(f"Warning: {message}", None)
+        # yt-dlp's own warnings advise command-line flags for a tool the user
+        # never ran - the very thing _QuietLogger exists to keep off the
+        # screen. The JavaScript-engine ones are the reachable case, and they
+        # have a VidiChord answer, so say that instead.
+        text = str(message)
+        if any(sign in text.lower() for sign in _JS_WARNING_SIGNS):
+            self._report(NO_JS_ENGINE, None)
+            return
+        self._report(f"Warning: {text}", None)
 
     def error(self, message: str) -> None:
         self._report(f"Error: {message}", None)
@@ -320,17 +393,33 @@ def download(
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
         "postprocessor_args": {"ffmpeg": ["-acodec", "pcm_s16le", "-ar", "44100"]},
     }
+    options.update(js_runtime_options())
     options.update(cookie_options(settings))
     options["logger"] = _ProgressLogger(report) if report else _QuietLogger()
 
-    try:
-        with yt_dlp.YoutubeDL(options) as ydl:
-            if ydl.download([url]) != 0:
-                raise RuntimeError("Download or conversion failed")
-    except Exception as error:
-        message = explain_failure(error, settings)
-        print(f"\n{message}\n", file=sys.stderr)
-        raise RuntimeError(message) from error
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                if ydl.download([url]) != 0:
+                    raise RuntimeError("Download or conversion failed")
+        except Exception as error:
+            # Each attempt re-extracts, because the refusal is attached to the
+            # streaming URL rather than to the video: reusing it would fail the
+            # same way every time.
+            if attempt < _DOWNLOAD_ATTEMPTS and _is_transient(error):
+                if report:
+                    report(
+                        f"YouTube refused the download, retrying "
+                        f"({attempt}/{_DOWNLOAD_ATTEMPTS - 1})...",
+                        None,
+                    )
+                time.sleep(_RETRY_PAUSE)
+                continue
+            message = explain_failure(error, settings)
+            print(f"\n{message}\n", file=sys.stderr)
+            raise RuntimeError(message) from error
+        else:
+            break
 
     if not destination.is_file():
         raise RuntimeError(f"Expected {destination.name} to exist after download")

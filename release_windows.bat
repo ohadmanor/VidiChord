@@ -4,8 +4,9 @@ REM  VidiChord - full Windows release build.
 REM
 REM  Produces release\VidiChord-<version>-win64.exe: one self-contained file
 REM  holding the Angular app, ffmpeg, the Essentia binaries, the madmom models
-REM  and every Python dependency. The machine it runs on needs no Python, no
-REM  Node.js and no installs.
+REM  and every Python dependency. The machine it runs on needs no Python and no
+REM  installs - but it does need a JavaScript engine to download from YouTube,
+REM  which is a separate program and cannot be bundled. See the closing banner.
 REM
 REM  Steps, in order:
 REM    1  preflight        virtual environment, Node.js, npm
@@ -258,7 +259,14 @@ echo   shows what it is doing and must stay open while the app runs.
 echo.
 echo   config.json and the VidiChord_Files library are written next to the exe,
 echo   so keep it somewhere writable - a normal folder, not Program Files.
-echo   Node.js on the target machine helps yt-dlp with some YouTube downloads.
+echo   The target machine needs a JavaScript engine for YouTube downloads -
+echo   Node.js, Deno, Bun or QuickJS. YouTube signs its download links and
+echo   unscrambling them means running the player's own code, which no bundle
+echo   can do for it. Installing Node.js is the usual answer; node.exe beside
+echo   VidiChord.exe works too. Local audio files need none of this.
+echo.
+echo   The first song also downloads the Whisper models from Hugging Face,
+echo   about 2 GB, once.
 echo.
 goto end
 

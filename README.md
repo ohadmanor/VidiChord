@@ -22,7 +22,7 @@ and re-run stage 3 without transcribing the song again.
   │ 1. Audio      yt-dlp + ffmpeg                    │──▶ audio.wav
   │                                                  │    01_source.json
   ├──────────────────────────────────────────────────┤
-  │ 2. Lyrics     detect language (tiny model, 30s)  │
+  │ 2. Lyrics     detect language (small model, 30s) │
   │               transcribe once (large-v3-turbo,   │──▶ 02_lyrics.json
   │                 or the Hebrew-tuned model)       │
   │               fetch real lyrics: LRClib → Genius │
@@ -50,6 +50,20 @@ Needleman-Wunsch matcher that tolerates mis-heard, dropped and invented words.
 Hebrew gets extra care: niqqud, final letter forms and optional vowels
 (*ktiv haser* / *ktiv male*) are all normalised away before comparison, so the
 same word spelled two ways still matches.
+
+### When the web does not have them
+
+Neither provider knows every song — older and local repertoire is where they
+run out — so the words can always be supplied by hand. Stage 2 stops and offers
+the choice: keep the transcript, or paste the real lyrics and have them timed
+against the recording like any other source.
+
+That offer is not a moment that can be missed. It is recorded on the song
+rather than on the run, so closing the app and coming back to it later asks
+again. **Paste lyrics** in the review toolbar makes the same box available at
+any time, which is what fixes the other half of the problem: lyrics that *were*
+found, but belong to a different recording of the song. Pasting rebuilds the
+song from stage 2, so it asks first when there is work to lose.
 
 ### Why three chord engines
 
@@ -106,8 +120,17 @@ npm run build
 For frontend development, `npm start` serves on `localhost:4200` and talks to
 the backend on port 8001.
 
-ffmpeg is downloaded automatically on first use. Node.js on `PATH` helps
-yt-dlp with some YouTube downloads.
+ffmpeg is downloaded automatically on first use. So are the Whisper models, from
+Hugging Face into `~/.cache/huggingface`: roughly 490 MB for the language
+detector and 1.6 GB for the transcription model, once, on the first song.
+
+Node.js on `PATH` matters more than it sounds. A YouTube streaming URL is
+signed, and answering the challenge means running the player's own JavaScript
+in a real engine — yt-dlp no longer has an interpreter of its own. It enables
+only Deno by default, so VidiChord names every engine yt-dlp supports and uses
+whichever it finds; Node is the one most machines already have. The
+`yt-dlp-ejs` package in `requirements.txt` supplies the script Node needs,
+which yt-dlp itself ships only for Deno and Bun.
 
 ### Configuration
 
@@ -147,6 +170,13 @@ A second, separate limit is per-network rather than per-request: fetch a lot in
 a short time, or share an office connection, and YouTube answers `429 Too Many
 Requests` for a while. No cookie fixes that one — only waiting does.
 
+A third refusal looks alarming and means nothing: a bare `403 Forbidden` on the
+media itself, which Google's servers hand out to a large share of perfectly
+ordinary requests — measured at roughly half of them on one video, with the
+next attempt on a freshly signed URL succeeding. yt-dlp treats a 403 as final
+and stops, so stage 1 asks again up to eight times before believing it. This is
+why a download sometimes pauses and reports that it is retrying.
+
 Local audio files are unaffected. "Add from file" needs none of this, and is
 the reliable path when YouTube is being difficult.
 
@@ -154,11 +184,11 @@ Environment variables:
 
 | Variable | Effect |
 |---|---|
-| `VIDICHORD_WHISPER_MODEL` | Force a Whisper model, e.g. `tiny` on a slow machine |
+| `VIDICHORD_WHISPER_MODEL` | Force the transcription model, e.g. `tiny` on a slow machine. Language detection still runs, and still uses its own model |
 | `VIDICHORD_WHISPER_DEVICE` | `cpu` (default) or `cuda` |
 | `VIDICHORD_WHISPER_THREADS` | CPU threads for transcription (default: all cores minus two) |
 | `VIDICHORD_WHISPER_BEAM` | Beam size (default `1`; the transcript is only a timing reference) |
-| `VIDICHORD_WHISPER_BATCH` | Windows decoded per batch (default `0` = sequential; try `8` on CUDA) |
+| `VIDICHORD_WHISPER_BATCH` | Windows decoded per batch (default `1` = sequential; try `8` on CUDA) |
 | `VIDICHORD_BEAT_THREADS` | Worker processes for madmom's downbeat ensemble (default: cores/3, max 4; 1 in the single-file exe, where each worker re-extracts the bundle) |
 | `VIDICHORD_CHORD_WORKERS` | Worker processes for madmom chord recognition (default: cores/4, max 4; 1 in the single-file exe) |
 | `VIDICHORD_WHISPER_VAD` | `0` to transcribe instrumental passages too (default `1`: skip them) |
@@ -201,11 +231,18 @@ again on every launch.
 
 ### What the single file costs
 
-Everything is in one exe, so the target machine needs no Python, no Node and no
-installs. The price is that the bootloader unpacks the whole bundle — most of a
+Everything is in one exe, so the target machine needs no Python and no installs.
+The price is that the bootloader unpacks the whole bundle — most of a
 gigabyte — into a temporary folder on *every* launch, before any of the app
 runs. Expect to wait. The console window stays open for that reason: it makes
 the wait legible, and it carries the pipeline's progress output afterwards.
+
+One thing the exe cannot carry is a JavaScript engine, because it is a separate
+program rather than a Python dependency. YouTube signs its download links and
+unscrambling them means running the player's own code, so a machine with no
+Node.js (or Deno, Bun or QuickJS) can open local audio files but not download
+from YouTube. Installing Node.js is the usual answer; dropping `node.exe` beside
+`VidiChord.exe` also works, since that folder is searched.
 
 `backend/VidiChord.spec` builds the same app as a folder instead. It starts in
 seconds because nothing is unpacked, and it is the better choice for anything

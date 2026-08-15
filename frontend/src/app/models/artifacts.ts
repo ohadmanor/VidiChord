@@ -17,7 +17,14 @@ export type SectionKind =
   | 'outro'
   | 'other';
 
-export type LyricsSourceName = 'lrclib' | 'genius' | 'manual' | 'cache' | 'raw';
+export type LyricsSourceName =
+  | 'lrclib'
+  | 'genius'
+  | 'manual'
+  | 'cache'
+  | 'raw'
+  /** The song has no lyrics; the sheet is chords-only bar charts. */
+  | 'instrumental';
 
 export type StageState = 'pending' | 'running' | 'done' | 'failed' | 'needs_input';
 
@@ -168,6 +175,42 @@ export interface SongSummary {
   updated_at: string;
   has_audio: boolean;
   stages: Record<string, StageState>;
+}
+
+/** One stage's state in the manifest, with the note the pipeline left on it. */
+export interface StageStatus {
+  state: StageState;
+  updated_at: string;
+  message: string;
+  error: string;
+}
+
+/** The four stages, by the names the manifest and the summary use. */
+export type StageName = 'audio' | 'lyrics' | 'chords' | 'sheet';
+
+export interface Manifest {
+  song_id: string;
+  title: string;
+  artist: string;
+  language: string;
+  created_at: string;
+  updated_at: string;
+  // Partial because a manifest written by an older build may not carry every
+  // stage - and because saying so is what makes reading one a checked access
+  // rather than a promise the compiler cannot keep.
+  stages: Partial<Record<StageName, StageStatus>>;
+}
+
+/**
+ * One song, as `GET /api/songs/{id}` returns it.
+ *
+ * The manifest is the durable record: jobs live in memory and are forgotten
+ * when the server restarts, so a run that stopped to ask the user something is
+ * only still visible here.
+ */
+export interface SongDetail extends SongSummary {
+  manifest: Manifest;
+  job: Job | null;
 }
 
 export interface AppConfig {

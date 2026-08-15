@@ -12,8 +12,21 @@ uvicorn>=0.27
 pydantic>=2.6
 
 # --- audio acquisition ---
-yt-dlp>=2024.4.9
+# The floor is the release that introduced the JavaScript-runtime interface
+# this app configures. Keep yt-dlp current regardless: YouTube changes often,
+# and a stale copy stops downloading long before it stops importing.
+yt-dlp>=2026.7.4
 requests>=2.31
+# Descrambling a YouTube streaming URL means running the player's JavaScript,
+# and yt-dlp ships the script that does it only for Deno and Bun. Node - the
+# engine most machines actually have - needs this package, and without it the
+# challenge goes unanswered and downloads are refused.
+#
+# Upgrade it in step with yt-dlp. yt-dlp checks the script's version and hash
+# against its own vendored manifest and silently ignores a mismatch, which
+# looks exactly like not having the package at all. The release build asserts
+# the two agree; `pip install -U yt-dlp yt-dlp-ejs` keeps them that way.
+yt-dlp-ejs>=0.8
 
 # --- transcription ---
 # 1.1 is the floor that knows the "large-v3-turbo" model alias.

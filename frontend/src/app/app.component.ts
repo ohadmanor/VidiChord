@@ -28,13 +28,26 @@ import {
   LyricsDoc,
   SheetBlock,
   SheetDoc,
+  SongDetail,
   SongSummary,
+  StageName,
 } from './models/artifacts';
 import { ApiService } from './services/api.service';
 import { AudioService } from './services/audio.service';
 
 const FUSION_STORAGE_KEY = 'vidiChordFusionConfig';
 const CLEANUP_STORAGE_KEY = 'vidiChordCleanupConfig';
+
+/**
+ * What to say when the paused run's own words are not to be had.
+ *
+ * The pipeline writes its reason onto the manifest, but a run interrupted
+ * mid-flight may leave none, so the panel still needs something to explain
+ * itself with.
+ */
+const DEFAULT_CHOICE_REASON =
+  'No lyrics were found for this song. Use the transcript, paste the lyrics, ' +
+  'or mark the song instrumental.';
 
 /**
  * Application shell.
@@ -88,6 +101,25 @@ export class AppComponent implements OnInit, OnDestroy {
   showChoiceModal = false;
   manualLyrics = '';
   selectedLanguage = 'auto';
+  /** Why the panel is open, in the pipeline's own words when it has any. */
+  choiceReason = '';
+  /**
+   * True when the panel is a free choice rather than a stalled run waiting to
+   * be answered. It decides both what the panel offers - a stalled run can
+   * still fall back to the transcript, a finished song has nothing to fall
+   * back to - and what going through with it costs.
+   *
+   * Derived from the song, not from how the panel was opened: dismissing a
+   * stalled run's panel and reaching for it again must not turn the transcript
+   * option off.
+   */
+  get choiceIsVoluntary(): boolean {
+    return !this.lyricsNeedsInput;
+  }
+  /** Whether stage 2 is parked waiting to be told what the lyrics are. */
+  lyricsNeedsInput = false;
+  /** Set while a choice is being submitted, so it cannot be submitted twice. */
+  choiceSubmitting = false;
 
   // --- editors -------------------------------------------------------------
   /**
@@ -250,11 +282,17 @@ export class AppComponent implements OnInit, OnDestroy {
 
   private async onJobFinished(job: Job): Promise<void> {
     if (job.state === 'needs_input') {
+      this.lyricsNeedsInput = true;
+      this.choiceReason = job.message || DEFAULT_CHOICE_REASON;
       this.showChoiceModal = true;
       return;
     }
     if (job.state === 'failed') {
       this.error = job.error || 'The run failed.';
+      // Whatever was pasted is kept: the run failing is exactly when the user
+      // needs another go at it, and retyping the lyrics is the one part of
+      // that they cannot get back. The reload below is what drops it, and
+      // that only happens once the run has worked.
       return;
     }
     await this.loadSong(this.songId);
@@ -265,25 +303,36 @@ export class AppComponent implements OnInit, OnDestroy {
     await this.refreshLibrary();
   }
 
-  async submitChoice(choice: 'ai' | 'manual'): Promise<void> {
+  async submitChoice(choice: 'ai' | 'manual' | 'instrumental'): Promise<void> {
+    if (!this.songId || this.choiceSubmitting) return;
     if (choice === 'manual' && !this.manualLyrics.trim()) return;
-    this.showChoiceModal = false;
+    // Nothing about the run that follows is idempotent - it rewrites the
+    // lyrics and re-fuses every chord - and the server starts one per request
+    // without checking whether another is already going.
+    this.choiceSubmitting = true;
     try {
       const job = await this.api.submitLyricsChoice(this.songId, choice, {
         lyrics: this.manualLyrics,
         language: this.selectedLanguage === 'auto' ? null : this.selectedLanguage,
         fusion: this.fusion,
+        cleanup: this.cleanup,
         review: true,
       });
+      // Closed only once the run is accepted. Closing first loses the pasted
+      // text on a rejection, which is the moment it is least replaceable - and
+      // the text is kept until the run succeeds, so a failure can be retried.
+      this.showChoiceModal = false;
       this.watch(job);
     } catch (err) {
       this.error = this.describe(err);
+    } finally {
+      this.choiceSubmitting = false;
     }
   }
 
   /** Re-run a stage and everything after it. */
   async rerun(stage: number): Promise<void> {
-    if (!this.songId || this.isRunning) return;
+    if (!this.songId || this.isRunning || this.syncing) return;
     this.persistTuning();
     try {
       const job = await this.api.rerunStage(this.songId, stage, {
@@ -309,15 +358,40 @@ export class AppComponent implements OnInit, OnDestroy {
     this.job = null;
     this.view = 'review';
     this.dirty = false;
+    this.forgetChoice();
+  }
+
+  /**
+   * Drop everything the lyrics panel was holding.
+   *
+   * Pasted words belong to the song they were pasted for. Left behind, they
+   * are offered to the next song opened - already typed, already valid - and
+   * one click sends one song's lyrics to be aligned against another's audio.
+   */
+  private forgetChoice(): void {
+    this.showChoiceModal = false;
+    this.choiceReason = '';
+    this.lyricsNeedsInput = false;
+    this.manualLyrics = '';
   }
 
   async loadSong(songId: string): Promise<void> {
     this.busy = true;
     this.error = '';
+    // Another song's run must not be left on screen: `job` drives isRunning,
+    // and a stale one hides the workspace behind a progress bar for work that
+    // has nothing to do with the song being opened. The run itself carries on
+    // in the background either way - only this view of it is dropped, and it
+    // is picked up again below if it belongs to the song being opened.
+    this.stopWatching?.();
+    this.stopWatching = null;
+    this.job = null;
+    this.forgetChoice();
     try {
       this.songId = songId;
       // Artifacts appear as their stages complete, so a missing one is normal.
-      const [lyrics, chords, sheet] = await Promise.all([
+      const [detail, lyrics, chords, sheet] = await Promise.all([
+        this.api.getSong(songId).catch(() => null),
         this.api.getLyrics(songId).catch(() => null),
         this.api.getChords(songId).catch(() => null),
         this.api.getSheet(songId).catch(() => null),
@@ -328,15 +402,91 @@ export class AppComponent implements OnInit, OnDestroy {
       this.lyricsText = lyrics ? this.renderLyricsText(lyrics) : '';
       this.dirty = false;
       // A song that has already been synced opens on its sheet; one that has
-      // not opens where the work is left to do.
-      this.view = sheet ? 'sheet' : 'review';
+      // not opens where the work is left to do. A sheet older than the lyrics
+      // or chords it was built from is neither: re-running an earlier stage
+      // leaves it on disk untouched and still marked done, so opening onto it
+      // would show words the song no longer has. Those go back to review,
+      // where the sync that would fix them is.
+      const stale = this.sheetIsBehind(detail);
+      this.view = sheet && !stale ? 'sheet' : 'review';
+      this.dirty = stale && !!sheet;
       this.audioService.loadTrack(this.api.audioUrl(songId));
       this.showLibrary = false;
+      // Back to automatic, because the dropdown is about to describe a
+      // different song. Carried over, it is sent as an override, and asking
+      // for a language the transcript was not made in throws that transcript
+      // away and spends minutes making another one.
+      this.selectedLanguage = 'auto';
+
+      // This song may still be being worked on. Following that run again is
+      // what keeps the buttons that would start a second one disabled, and it
+      // is the only way back to its progress and its result.
+      if (detail?.job && (detail.job.state === 'queued' || detail.job.state === 'running')) {
+        this.watch(detail.job);
+        return;
+      }
+
+      // A run that stopped to ask for lyrics asks again here. The question
+      // outlives the job that raised it - jobs are in memory and forgotten on
+      // restart - so it is read back off the manifest instead.
+      if (detail?.stages?.['lyrics'] === 'needs_input') {
+        this.lyricsNeedsInput = true;
+        this.choiceReason =
+          detail.manifest?.stages?.['lyrics']?.message || DEFAULT_CHOICE_REASON;
+        this.showChoiceModal = true;
+      }
     } catch (err) {
       this.error = this.describe(err);
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * True when the sheet on disk was built before the lyrics or chords it is
+   * made of.
+   *
+   * Stages 2 and 3 can be re-run without stage 4 - that is what the review
+   * step is - and nothing marks the sheet stale when they are. It keeps its
+   * "done" state and its old words until the next sync.
+   */
+  private sheetIsBehind(detail: SongDetail | null): boolean {
+    const stages = detail?.manifest?.stages;
+    const builtAt = stages?.['sheet']?.updated_at;
+    if (!builtAt) return false;
+    const sources: StageName[] = ['lyrics', 'chords'];
+    return sources.some((name) => {
+      const source = stages[name]?.updated_at;
+      return !!source && source > builtAt;
+    });
+  }
+
+  /**
+   * Open the paste box on purpose, rather than because the run stopped.
+   *
+   * Lyrics that were found but belong to another recording are no better than
+   * lyrics that were never found, and until now the only way to replace them
+   * was to re-run the lookup and hope it chose differently.
+   */
+  openLyricsPaste(): void {
+    if (!this.songId || this.isRunning || this.syncing) return;
+    // A run already waiting to be told what the lyrics are has nothing to
+    // lose, so it just reopens its own question. Only a song that has been
+    // through stage 2 successfully has work that pasting would rebuild.
+    if (!this.lyricsNeedsInput && (this.lyrics || this.chords)) {
+      const edits = this.dirty ? 'Unsaved edits, and corrections' : 'Corrections';
+      const warning =
+        'Replacing the lyrics rebuilds this song from stage 2.\n\n' +
+        `${edits} you have made to the lyrics and to the chords will be ` +
+        'replaced, and the sheet will need syncing again.\n\nContinue?';
+      if (!window.confirm(warning)) return;
+    }
+    this.showChoiceModal = true;
+  }
+
+  /** Close the paste box without changing anything. */
+  dismissChoice(): void {
+    this.showChoiceModal = false;
   }
 
   async refreshLibrary(): Promise<void> {
@@ -385,6 +535,21 @@ export class AppComponent implements OnInit, OnDestroy {
    */
   async sync(): Promise<void> {
     if (!this.songId || this.syncing || !this.lyrics || !this.chords) return;
+    // Words typed into a song that has no timed lines yet - an instrumental
+    // the user is correcting - have no original timings to inherit, and
+    // parsing them here would stack every line into the opening seconds.
+    // Stage 2 is the only thing that can align them to the audio, so the
+    // typed text goes through the same door as pasted lyrics.
+    if (!this.lyrics.lines.length && this.lyricsText.trim()) {
+      const warning =
+        'This song has no timed lyrics yet, so the words you typed will be ' +
+        'aligned to the audio from stage 2. Chord corrections will be ' +
+        're-extracted.\n\nContinue?';
+      if (!window.confirm(warning)) return;
+      this.manualLyrics = this.lyricsText;
+      await this.submitChoice('manual');
+      return;
+    }
     this.syncing = true;
     this.error = '';
     try {

@@ -139,3 +139,95 @@ def test_cookie_configuration_survives_a_save(tmp_path):
     restored = Settings.load(tmp_path / "config.json")
     assert restored.cookies_browser == "firefox"
     assert restored.cookies_file == tmp_path / "jar.txt"
+
+
+# -- JavaScript runtimes ----------------------------------------------------
+#
+# Streaming URLs are signed, and answering the challenge means running the
+# player's own JavaScript in a real engine.
+
+
+def test_every_supported_javascript_engine_is_offered():
+    """yt-dlp enables only Deno by default, and Node is what machines have."""
+    runtimes = stage1_audio.js_runtime_options()["js_runtimes"]
+
+    assert "node" in runtimes
+    assert "deno" in runtimes
+    # yt-dlp wants a config mapping per engine, empty meaning "defaults".
+    assert all(config == {} for config in runtimes.values())
+
+
+def test_the_engines_named_are_ones_yt_dlp_knows():
+    """A name yt-dlp does not recognise makes it raise rather than shrug."""
+    from yt_dlp.globals import supported_js_runtimes
+
+    offered = set(stage1_audio.js_runtime_options()["js_runtimes"])
+    assert offered <= set(supported_js_runtimes.value)
+
+
+# -- retrying a refused download --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+        "HTTP Error 403: Forbidden",
+    ],
+)
+def test_a_bare_403_is_worth_retrying(refusal):
+    """Google's media hosts refuse a large share of requests for no reason."""
+    assert stage1_audio._is_transient(RuntimeError(refusal))
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "Sign in to confirm you're not a bot",
+        "HTTP Error 429: Too Many Requests",
+        "Requested format is not available",
+    ],
+)
+def test_a_refusal_that_will_not_pass_is_not_retried(refusal):
+    """Retrying these only delays advice the user has to act on."""
+    assert not stage1_audio._is_transient(RuntimeError(refusal))
+
+
+def test_an_unrelated_failure_is_not_retried():
+    assert not stage1_audio._is_transient(RuntimeError("No space left on device"))
+
+
+# -- what the user is told about a missing JavaScript engine -----------------
+
+
+def test_yt_dlps_javascript_advice_is_replaced_with_our_own():
+    """Its warning names a command-line flag for a tool the user never ran."""
+    seen = []
+    logger = stage1_audio._ProgressLogger(lambda message, percent: seen.append(message))
+
+    logger.warning(
+        "No supported JavaScript runtime could be found. Only deno is enabled "
+        "by default; to use another runtime add --js-runtimes RUNTIME[:PATH] "
+        "to your command/config."
+    )
+
+    assert seen == [stage1_audio.NO_JS_ENGINE]
+    assert "--js-runtimes" not in seen[0]
+
+
+def test_a_failed_signature_gets_the_same_answer():
+    seen = []
+    logger = stage1_audio._ProgressLogger(lambda message, percent: seen.append(message))
+
+    logger.warning("Signature solving failed: Some formats may be missing.")
+
+    assert seen == [stage1_audio.NO_JS_ENGINE]
+
+
+def test_an_ordinary_warning_still_comes_through():
+    seen = []
+    logger = stage1_audio._ProgressLogger(lambda message, percent: seen.append(message))
+
+    logger.warning("Falling back to generic extractor")
+
+    assert seen == ["Warning: Falling back to generic extractor"]
