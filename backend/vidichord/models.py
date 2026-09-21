@@ -1,13 +1,17 @@
-"""Schemas for the four pipeline artifacts.
+"""Schemas for the pipeline artifacts.
 
 Every stage reads the artifacts produced before it and writes exactly one file,
 so these models are the contract between stages. They are also the wire format
 for the HTTP API - the frontend renders ``SheetDoc`` directly.
 
     01_source.json  -> SourceDoc    stage 1, audio acquisition
+    05_stems.json   -> StemsDoc     stage 5, source separation (runs 2nd)
     02_lyrics.json  -> LyricsDoc    stage 2, transcription + alignment
     03_chords.json  -> ChordsDoc    stage 3, beat/bar-aligned chords
     04_sheet.json   -> SheetDoc     stage 4, the rendered song sheet
+
+Stage numbers are stable identifiers rather than the order stages run in;
+see :data:`vidichord.pipeline.DEFAULT_ORDER`.
 
 All times are floating-point seconds from the start of the audio.
 """
@@ -48,6 +52,65 @@ class SourceDoc(Artifact):
     duration: float = 0.0
     audio_filename: str = "audio.wav"
     downloaded_at: str = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 - stems (runs between stages 1 and 2)
+# ---------------------------------------------------------------------------
+
+#: The four parts htdemucs separates a mix into. "other" is everything that is
+#: not a voice, a drum or a bass - guitars, keys, strings.
+STEM_NAMES = ("vocals", "drums", "bass", "other")
+
+
+class StemFile(Artifact):
+    """One separated part, as written into the song folder."""
+
+    name: str
+    #: Path relative to the project root, e.g. ``stems/vocals.ogg``.
+    filename: str
+    bytes: int = 0
+
+
+class StemsDoc(Artifact):
+    """What source separation produced, or why it produced nothing.
+
+    Written on every run of stage 5, including the runs that separate nothing:
+    a document with ``unavailable`` set is how the app tells "never tried"
+    apart from "cannot", and is what lets the rest of the pipeline carry on
+    over the full mix without anything having failed.
+    """
+
+    model: str = ""
+    device: str = "cpu"
+    format: str = "opus"
+    duration: float = 0.0
+    #: Loudness of the isolated vocal. A separated vocal this quiet means
+    #: there was nothing to separate - a far better instrumental hint than a
+    #: voice-activity pass over the full mix. A hint only: whether a song has
+    #: words is the user's call, never this file's.
+    vocals_rms_db: float = 0.0
+    #: The identity of the audio these stems were separated from, so a later
+    #: stage can tell they still describe the ``audio.wav`` on disk. Same
+    #: fingerprint stage 3 stores on :class:`ChordsDoc`.
+    audio_fingerprint: str = ""
+    separated_at: str = Field(default_factory=utcnow)
+    stems: list[StemFile] = Field(default_factory=list)
+    #: Empty when separation ran. Otherwise the reason it did not, in words
+    #: worth showing the user - demucs not installed, separation switched off,
+    #: or whatever the separator raised.
+    unavailable: str = ""
+
+    def path_for(self, name: str) -> str:
+        """The relative path of one stem, or "" if this document has no such stem."""
+        for stem in self.stems:
+            if stem.name == name:
+                return stem.filename
+        return ""
+
+    @property
+    def separated(self) -> bool:
+        return not self.unavailable and bool(self.stems)
 
 
 # ---------------------------------------------------------------------------
@@ -312,5 +375,8 @@ class Manifest(Artifact):
         return self.stages.setdefault(STAGE_NAMES[number - 1], StageStatus())
 
 
-#: Stage keys in ``Manifest.stages``, indexed by stage number - 1.
-STAGE_NAMES = ("audio", "lyrics", "chords", "sheet")
+#: Stage keys in ``Manifest.stages``, indexed by stage number - 1. Stems is
+#: last because it was added once 01-04 were already on disk in every song
+#: folder; it runs second. Manifests written before it existed simply lack the
+#: key, which ``Manifest.stage`` fills in on first use.
+STAGE_NAMES = ("audio", "lyrics", "chords", "sheet", "stems")

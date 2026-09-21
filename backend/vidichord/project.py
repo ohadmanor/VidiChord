@@ -5,8 +5,10 @@ file per pipeline stage::
 
     VidiChord_Files/<song_id>/
         audio.wav
+        stems/vocals.ogg, drums.ogg, bass.ogg, other.ogg
         manifest.json
         01_source.json
+        05_stems.json
         02_lyrics.json
         03_chords.json
         04_sheet.json
@@ -36,21 +38,48 @@ from .models import (
     SheetDoc,
     SourceDoc,
     StageState,
+    StemsDoc,
     utcnow,
 )
 
-ArtifactT = TypeVar("ArtifactT", SourceDoc, LyricsDoc, ChordsDoc, SheetDoc, Manifest)
+ArtifactT = TypeVar(
+    "ArtifactT", SourceDoc, LyricsDoc, ChordsDoc, SheetDoc, StemsDoc, Manifest
+)
 
 AUDIO_FILENAME = "audio.wav"
 MANIFEST_FILENAME = "manifest.json"
 SHEET_TEXT_FILENAME = "sheet.txt"
+STEMS_DIRNAME = "stems"
 
 _ARTIFACT_FILENAMES = {
     SourceDoc: "01_source.json",
     LyricsDoc: "02_lyrics.json",
     ChordsDoc: "03_chords.json",
     SheetDoc: "04_sheet.json",
+    # Stems were added once 01-04 were on disk in every song folder, so the
+    # file takes the next free number although the stage runs second.
+    StemsDoc: "05_stems.json",
 }
+
+
+def audio_fingerprint(path: Path) -> str:
+    """A cheap identity for an audio file's content.
+
+    Size plus the first and last megabyte - enough to notice a re-added local
+    file whose content changed, without hashing a whole WAV. Stages 3 and 5
+    both store it, so each can tell whether what it computed still describes
+    the audio on disk.
+    """
+    digest = hashlib.md5()
+    size = path.stat().st_size
+    digest.update(str(size).encode())
+    with path.open("rb") as handle:
+        digest.update(handle.read(1 << 20))
+        if size > (1 << 20):
+            handle.seek(-min(size - (1 << 20), 1 << 20), 2)
+            digest.update(handle.read(1 << 20))
+    return digest.hexdigest()
+
 
 # Characters Windows forbids in a path component, plus control characters.
 _ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -145,6 +174,22 @@ class SongProject:
     def sheet_text_path(self) -> Path:
         return self.root / SHEET_TEXT_FILENAME
 
+    @property
+    def stems_dir(self) -> Path:
+        return self.root / STEMS_DIRNAME
+
+    def stem_path(self, filename: str) -> Path:
+        """Resolve a stem path recorded on a :class:`StemsDoc`.
+
+        The filename comes off a JSON document and, through the API, out of a
+        URL, so it is confined to the song's own stems directory here rather
+        than trusted.
+        """
+        candidate = (self.root / filename).resolve()
+        if candidate.parent != self.stems_dir.resolve():
+            raise KeyError(filename)
+        return candidate
+
     def artifact_path(self, model: type) -> Path:
         return self.root / _ARTIFACT_FILENAMES[model]
 
@@ -198,6 +243,16 @@ class SongProject:
         return f"SongProject({self.song_id!r})"
 
 
+def _has_stems(project: SongProject) -> bool:
+    """Whether this song has stems the player could actually mix.
+
+    A stems document alone is not enough: stage 5 writes one on every run,
+    including the runs that separated nothing because demucs was unavailable.
+    """
+    document = project.read_optional(StemsDoc)
+    return bool(document and document.separated)
+
+
 def summarise(project: SongProject) -> dict:
     """Compact description of a project for the library listing.
 
@@ -209,6 +264,7 @@ def summarise(project: SongProject) -> dict:
 
     produced = {
         "audio": project.audio_path.is_file(),
+        "stems": project.has(StemsDoc),
         "lyrics": project.has(LyricsDoc),
         "chords": project.has(ChordsDoc),
         "sheet": project.has(SheetDoc),
@@ -232,5 +288,6 @@ def summarise(project: SongProject) -> dict:
         "language": manifest.language,
         "updated_at": manifest.updated_at,
         "has_audio": produced["audio"],
+        "has_stems": _has_stems(project),
         "stages": stages,
     }

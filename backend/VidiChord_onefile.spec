@@ -218,6 +218,9 @@ try:
 except Exception:
     print("*** Building WITHOUT madmom: bar lines estimated, two chord engines.")
 
+# Separation is deliberately not bundled; see the excludes list below.
+print("*** Building WITHOUT stem separation (Demucs and torch are excluded).")
+
 a = Analysis(
     [str(BACKEND_DIR / "main.py")],
     pathex=[str(BACKEND_DIR)],
@@ -230,6 +233,20 @@ a = Analysis(
     # Nothing here is imported by the app, and each one costs tens of
     # megabytes in a file users have to download.
     excludes=[
+        # Stem separation, and the PyTorch underneath it: together they weigh
+        # more than everything else in this bundle put together, on a file
+        # people already wait a good while to unpack. Separation is therefore
+        # a from-source feature, and the app says so when asked for it in a
+        # frozen build. These have to be named here rather than merely left
+        # uninstalled: PyInstaller reads imports inside function bodies too,
+        # so the lazy `import demucs.api` would drag all of it in from a
+        # developer's venv.
+        "demucs",
+        "torch",
+        "torchaudio",
+        "sphn",
+        "lameenc",
+        "julius",
         "tkinter",
         "matplotlib",
         "pytest",

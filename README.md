@@ -9,7 +9,7 @@ app, which opens in your browser.
 
 ---
 
-## The four stages
+## The stages
 
 Each stage reads the artifacts produced before it and writes exactly one of its
 own. That means any stage can be re-run on its own — change the chord tuning
@@ -22,9 +22,13 @@ and re-run stage 3 without transcribing the song again.
   │ 1. Audio      yt-dlp + ffmpeg                    │──▶ audio.wav
   │                                                  │    01_source.json
   ├──────────────────────────────────────────────────┤
+  │ 5. Stems      Demucs splits the mix four ways    │──▶ stems/*.ogg
+  │               (optional; see below)              │    05_stems.json
+  ├──────────────────────────────────────────────────┤
   │ 2. Lyrics     detect language (small model, 30s) │
-  │               transcribe once (large-v3-turbo,   │──▶ 02_lyrics.json
-  │                 or the Hebrew-tuned model)       │
+  │               transcribe the vocals stem once    │──▶ 02_lyrics.json
+  │                 (large-v3-turbo, or the          │
+  │                  Hebrew-tuned model)             │
   │               fetch real lyrics: LRClib → Genius │
   │               align them onto the transcript     │
   │               recover verse/chorus structure     │
@@ -39,6 +43,11 @@ and re-run stage 3 without transcribing the song again.
   │               render bar charts for instrumentals│    sheet.txt
   └──────────────────────────────────────────────────┘
 ```
+
+Stage numbers are identifiers, not the running order. Separation was added
+once the artifact files `01`–`04` were already on disk in every song folder,
+so it took the next free number rather than renaming them all; it runs second,
+which is where it has to run to hand the transcription a clean vocal.
 
 ### Why lyrics come from the web
 
@@ -64,6 +73,62 @@ again. **Paste lyrics** in the review toolbar makes the same box available at
 any time, which is what fixes the other half of the problem: lyrics that *were*
 found, but belong to a different recording of the song. Pasting rebuilds the
 song from stage 2, so it asks first when there is work to lose.
+
+### Why the song is taken apart first
+
+[Demucs](https://github.com/adefossez/demucs) splits the recording into four
+parts — vocals, drums, bass, and everything else — and both halves of the app
+want that.
+
+The player turns them into faders, so a song can be practised against its own
+backing track, or the bass line soloed to hear what it actually does. And
+stage 2 transcribes the isolated vocal rather than the whole band, which is
+where Whisper is at its best: it was trained on speech, and its word timings —
+the only thing this app keeps from a transcript — are much better for it.
+
+On the Hebrew test song the difference is not subtle. Transcribing the mix,
+Whisper's voice-activity pass finds one region in the whole track and returns
+8 words, of which the aligner can pin **6 of the song's 121 lyric words** to a
+time. Transcribing the separated vocal, the same model returns 29 segments and
+125 words, and times **101 of 121**. Every lyric word that finds no match is a
+word whose time is interpolated rather than heard, so this is the difference
+between a sheet whose chords sit where they are sung and one that drifts.
+
+The same isolation gives a much better answer
+to *does this song have singing at all*: a track with a vocal produces a loud
+vocals stem and one without produces near-silence, which beats guessing at a
+voice through a full mix. It is still only a hint. Whether a song has words is
+always the user's call.
+
+Chord recognition deliberately stays on the full mix. The three engines are
+weighted by numbers measured against 15 hand-verified songs, and every song's
+per-engine predictions are stored so a re-run can re-fuse them in
+milliseconds; feeding the engines different audio would quietly invalidate
+both. That is an experiment worth running one day, with the reference sheets
+to score it. It is not a thing to assume.
+
+**Demucs is optional**, in the same way madmom is, and for a blunter reason:
+it brings PyTorch, about 400 MB installed, which is more than the rest of
+VidiChord weighs. So it is not in `requirements.txt` and it is never bundled
+into the released executable. Install it when you want it:
+
+```bat
+backend\.venv\Scripts\pip install demucs
+```
+
+or pass `--with-stems` to `run_local.bat` once. Everything installs from
+wheels — unlike madmom, no compiler is involved.
+
+Without it, nothing breaks: stage 5 records why it separated nothing, the
+player keeps playing the mix with no mixer to offer, and the lyrics are timed
+against the full recording exactly as they were before. With it, expect a
+couple of extra minutes per song — measured at **158 s for a 3:39 track**, or
+0.72× its length, on a Core Ultra 7 265U with no GPU — and about 13 MB of Opus
+stems beside the 37 MB `audio.wav`. A CUDA GPU, if there is one, is used
+automatically and turns that into seconds.
+
+The first separation also downloads the model, roughly 80 MB, into
+`~/.cache/torch`.
 
 ### Why three chord engines
 
@@ -154,6 +219,11 @@ plus two optional keys for identifying YouTube requests, described below:
 - `cookies_file` — a Netscape-format cookie jar to send with them
 - `cookies_browser` — a browser to read those cookies from instead
 
+and two for separation, both editable in settings as well:
+
+- `stems_enabled` — whether to split every song into stems (default: yes)
+- `stems_model` — which Demucs model to do it with (default: `htdemucs`)
+
 The file is gitignored and optional: every key defaults, and the app writes
 the file itself the first time settings are saved. It holds no secrets, and
 VidiChord needs no API keys at all — lyrics come from LRClib and Genius, both
@@ -203,6 +273,12 @@ Environment variables:
 | `VIDICHORD_BEAT_THREADS` | Worker processes for madmom's downbeat ensemble (default: cores/3, max 4; 1 in the single-file exe, where each worker re-extracts the bundle) |
 | `VIDICHORD_CHORD_WORKERS` | Worker processes for madmom chord recognition (default: cores/4, max 4; 1 in the single-file exe) |
 | `VIDICHORD_WHISPER_VAD` | `0` to transcribe instrumental passages too (default `1`: skip them) |
+| `VIDICHORD_DEMUCS=0` | Do not separate stems, whatever the settings say |
+| `VIDICHORD_DEMUCS_MODEL` | Separation model (default `htdemucs`; `htdemucs_ft` is better and 4x slower) |
+| `VIDICHORD_DEMUCS_DEVICE` | `cpu` or `cuda`; by default CUDA when torch finds a GPU |
+| `VIDICHORD_DEMUCS_SEGMENT` | Seconds per chunk, to cut peak memory (htdemucs caps at 7.8) |
+| `VIDICHORD_DEMUCS_JOBS` | Parallel separation jobs |
+| `VIDICHORD_DEMUCS_THREADS` | Torch CPU threads (default: all cores minus one) |
 | `VIDICHORD_COOKIES` | Path to a `cookies.txt` for YouTube requests |
 | `VIDICHORD_COOKIES_BROWSER` | Read YouTube cookies from this browser, e.g. `firefox` |
 | `VIDICHORD_NO_BROWSER=1` | Do not open a browser on start |
@@ -248,7 +324,12 @@ gigabyte — into a temporary folder on *every* launch, before any of the app
 runs. Expect to wait. The console window stays open for that reason: it makes
 the wait legible, and it carries the pipeline's progress output afterwards.
 
-One thing the exe cannot carry is a JavaScript engine, because it is a separate
+Two things the exe does not carry. Stem separation is one, left out on
+purpose: Demucs and PyTorch together outweigh everything else in the bundle,
+on a file that already unpacks most of a gigabyte on every launch. The app
+says so plainly when the mixer is asked for, and every other feature works.
+
+The other is a JavaScript engine, because it is a separate
 program rather than a Python dependency. YouTube signs its download links and
 unscrambling them means running the player's own code, so a machine with no
 Node.js (or Deno, Bun or QuickJS) can open local audio files but not download
@@ -266,8 +347,10 @@ the exe somewhere writable rather than in `Program Files`.
 ```
 VidiChord_Files/<Artist> - <Title> [hash]/
     audio.wav
+    stems/             vocals.ogg, drums.ogg, bass.ogg, other.ogg
     manifest.json      stage states and timings
     01_source.json     where the audio came from
+    05_stems.json      separation model, files, vocal loudness
     02_lyrics.json     language, sections, lines, word timings
     03_chords.json     bpm, key, bars → beats → chords
     04_sheet.json      the rendered sheet, block by block
@@ -380,6 +463,7 @@ backend/
       stage2_lyrics.py              transcript, official lyrics, word timings and sections
       stage3_chords.py              three chord engines fused onto a beat grid
       stage4_sheet.py               interleaves lyrics and chords into sheet blocks
+      stage5_stems.py               Demucs separation, which never fails a run
     lyrics/
       __init__.py                   public exports for the lyrics package
       whisper_engine.py             Whisper transcription and language detection
@@ -395,6 +479,9 @@ backend/
       cleanup.py                    chord noise removal and its metrics
       vocabulary.py                 chord spelling, parsing and key theory
       _madmom_compat.py             compatibility shims for importing madmom
+    stems/
+      __init__.py                   public exports for source separation
+      demucs_engine.py              Demucs, and why it is not always there
     sheet/
       __init__.py                   re-exports for sheet assembly
       layout.py                     aligning chords above lyrics by column
@@ -418,6 +505,7 @@ backend/
     test_project.py                 song id, artifact I/O and manifest tests
     test_server.py                  FastAPI route, audio range and review tests
     test_sheet.py                   chord placement, instrumentals and export
+    test_stems.py                   separation, its absence, and what stage 2 reads
     test_structure.py               verse and chorus structure recovery
 frontend/
   package.json                      npm dependencies and build scripts
@@ -439,7 +527,11 @@ frontend/
       app.config.ts                 bootstrap providers and change-detection setup
       models/artifacts.ts           mirrors the backend schemas, plus tuning defaults
       services/api.service.ts       backend REST client and job progress stream
-      services/audio.service.ts     audio playback and transport state as signals
+      services/audio.service.ts     playback: the mix, or a four-stem Web Audio mixer
+      components/stem-mixer/
+        stem-mixer.component.ts     faders, mutes, solos and presets over the stems
+        stem-mixer.component.html   the mixer panel, and what it says without stems
+        stem-mixer.component.css    fader and preset styling
       components/sheet-view/
         sheet-view.component.ts     renders and edits the finished song sheet
         sheet-view.component.html   title block, chord rows over lyric rows
@@ -469,6 +561,8 @@ GET    /api/jobs/{id}/events               progress, server-sent events
 POST   /api/songs/{id}/lyrics/choice       resume a paused run
 POST   /api/songs/{id}/stages/{n}/rerun    re-run one stage onwards
 GET    /api/songs/{id}/audio               range-capable stream
+GET    /api/songs/{id}/stems               separation record, or why there is none
+GET    /api/songs/{id}/stems/{name}        one stem: vocals, drums, bass or other
 GET|PUT /api/songs/{id}/{lyrics|chords|sheet}
 POST   /api/songs/{id}/export              write a songbook file
 GET|PUT /api/config

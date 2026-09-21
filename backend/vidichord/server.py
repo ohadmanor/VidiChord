@@ -29,8 +29,12 @@ from .chords.cleanup import CleanupConfig
 from .chords.fusion import FusionConfig
 from .config import PORT, Settings, frontend_dir
 from .jobs import JobManager
-from .models import ChordsDoc, LyricsDoc, SheetDoc, SourceDoc
-from .pipeline import StageContext, run_stage
+from .models import STEM_NAMES, ChordsDoc, LyricsDoc, SheetDoc, SourceDoc, StemsDoc
+# REVIEW_FINAL_STAGE is stage 3: stage 4 lays the sheet out from the lyrics and
+# the chords, so running it before either has been corrected wastes the work -
+# the sheet is built on demand instead, by POST /api/songs/{id}/sync. It lives
+# in the pipeline, which needs it to work out how far a run should go.
+from .pipeline import REVIEW_FINAL_STAGE, StageContext, run_stage, stages_from
 from .pipeline import stage1_audio
 from .project import SongProject, summarise
 from .sheet import export
@@ -45,12 +49,6 @@ _ALLOWED_ORIGINS = [
 
 _RANGE = re.compile(r"bytes=(\d*)-(\d*)")
 _CHUNK = 1 << 18
-
-#: Where a reviewed run stops. Stage 4 lays the sheet out from the lyrics and
-#: the chords, so running it before either has been corrected wastes the work -
-#: the sheet is built on demand instead, by ``POST /api/songs/{id}/sync``.
-REVIEW_FINAL_STAGE = 3
-
 
 # ---------------------------------------------------------------------------
 # Request bodies
@@ -97,6 +95,8 @@ class SettingsRequest(BaseModel):
     #: not know about these fields cannot wipe them.
     cookies_file: str | None = None
     cookies_browser: str | None = None
+    stems_enabled: bool | None = None
+    stems_model: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -136,15 +136,6 @@ def create_app() -> FastAPI:
 
         return build
 
-    def _final_stage(review: bool) -> int:
-        """Last stage a run should reach.
-
-        A reviewed run stops with the lyrics and chords on screen and lays the
-        sheet out only once the user has corrected them and pressed sync, so
-        stage 4 is not part of the run.
-        """
-        return REVIEW_FINAL_STAGE if review else 4
-
     def pipeline_params(request: Any) -> dict:
         """Collect the stage parameters carried on a request body."""
         params: dict = {}
@@ -180,7 +171,7 @@ def create_app() -> FastAPI:
         params = pipeline_params(request)
         job = jobs().submit(
             project.song_id,
-            tuple(range(1, _final_stage(request.review) + 1)),
+            stages_from(1, request.review),
             make_context_builder(project, params),
         )
         return {"song_id": project.song_id, "job": job.snapshot()}
@@ -216,6 +207,11 @@ def create_app() -> FastAPI:
     @app.get("/api/songs/{song_id}/source")
     def get_source(song_id: str) -> SourceDoc:
         return _read_artifact(open_project(song_id), SourceDoc)
+
+    @app.get("/api/songs/{song_id}/stems")
+    def get_stems(song_id: str) -> StemsDoc:
+        """What separation produced - or, with ``unavailable`` set, why it did not."""
+        return _read_artifact(open_project(song_id), StemsDoc)
 
     @app.get("/api/songs/{song_id}/lyrics")
     def get_lyrics(song_id: str) -> LyricsDoc:
@@ -292,17 +288,15 @@ def create_app() -> FastAPI:
 
     @app.post("/api/songs/{song_id}/stages/{number}/rerun")
     def rerun_stage(song_id: str, number: int, request: RerunRequest) -> dict:
-        if number not in (1, 2, 3, 4):
-            raise HTTPException(status_code=400, detail="Stage must be 1-4")
+        if number not in (1, 2, 3, 4, 5):
+            raise HTTPException(status_code=400, detail="Stage must be 1-5")
 
         project = open_project(song_id)
-        if request.cascade:
-            # A reviewed re-run stops short of the sheet, but never short of
-            # the stage that was actually asked for.
-            last = max(number, _final_stage(request.review))
-            stages = tuple(range(number, last + 1))
-        else:
-            stages = (number,)
+        # Cascading follows the running order rather than counting upwards, so
+        # re-separating a song carries on into the transcription that reads the
+        # vocals stem. A reviewed re-run stops short of the sheet, but never
+        # short of the stage that was actually asked for.
+        stages = stages_from(number, request.review) if request.cascade else (number,)
         job = jobs().submit(
             song_id, stages, make_context_builder(project, pipeline_params(request))
         )
@@ -326,7 +320,7 @@ def create_app() -> FastAPI:
 
         job = jobs().submit(
             song_id,
-            tuple(range(2, _final_stage(request.review) + 1)),
+            stages_from(2, request.review),
             make_context_builder(project, params),
         )
         return job.snapshot()
@@ -375,6 +369,40 @@ def create_app() -> FastAPI:
         path = project.audio_path
         if not path.is_file():
             raise HTTPException(status_code=404, detail="No audio for this song")
+        return _serve_media(path, request)
+
+    @app.get("/api/songs/{song_id}/stems/{name}")
+    def stream_stem(song_id: str, name: str, request: Request) -> Response:
+        """Stream one separated part, for the player to mix.
+
+        The name comes out of the URL, so it is matched against the four the
+        separator produces rather than joined onto a path, and the document
+        decides the file - which is also what keeps the format an
+        implementation detail the client never has to guess at.
+        """
+        project = open_project(song_id)
+        if name not in STEM_NAMES:
+            raise HTTPException(status_code=404, detail=f"No such stem: {name}")
+
+        document = project.read_optional(StemsDoc)
+        relative = document.path_for(name) if document else ""
+        if not relative:
+            raise HTTPException(status_code=404, detail=f"No {name} stem for this song")
+        try:
+            path = project.stem_path(relative)
+        except KeyError:
+            raise HTTPException(status_code=403, detail="Refusing to serve that path")
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail=f"No {name} stem for this song")
+        return _serve_media(path, request)
+
+    def _serve_media(path: Path, request: Request) -> Response:
+        """Serve a file from the library, honouring byte ranges.
+
+        Range support is what makes seeking in a long file work without the
+        whole thing being read into memory, and the confinement check is what
+        stops the server being talked into serving anything else on the disk.
+        """
         if not settings().is_inside_library(path):
             raise HTTPException(status_code=403, detail="Refusing to serve that path")
 
@@ -446,7 +474,7 @@ def create_app() -> FastAPI:
     def put_config(request: SettingsRequest) -> dict:
         current = settings()
         data = request.model_dump()
-        for name in ("cookies_file", "cookies_browser"):
+        for name in ("cookies_file", "cookies_browser", "stems_enabled", "stems_model"):
             if data.get(name) is None:
                 data[name] = current.to_dict()[name]
         # Keep writing to wherever the current settings came from, so a test

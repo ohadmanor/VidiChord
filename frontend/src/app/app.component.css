@@ -731,3 +731,45 @@ textarea:focus {
   padding: 6px 12px;
   font-size: 0.78rem;
 }
+
+/* ----------------------------------------------------------- stem mixer */
+
+.mixer-anchor {
+  position: relative;
+  display: flex;
+  align-items: center;
+  /* Lift the whole anchor, so the panel hanging off it sits over the sheet
+     rather than being painted into it. */
+  z-index: 200;
+}
+
+.icon-btn.active {
+  color: var(--primary);
+  background: var(--primary-glow);
+}
+
+/* Deliberately not .glass-panel: that class is for full-height panes and
+   carries height: 100%, which collapses a popover to the height of the button
+   it hangs from and spills its contents over the page. */
+.mixer-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 200;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-lg);
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.field-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}

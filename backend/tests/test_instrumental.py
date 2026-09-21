@@ -171,7 +171,9 @@ class TestExplicitChoice:
 
     def test_the_instrumental_choice_keeps_the_cached_language(self, context, monkeypatch):
         monkeypatch.setattr(stage2_lyrics, "WhisperEngine", _ExplodingEngine)
-        stage2_lyrics._save_transcript(context, "he", [], vocals_detected=False)
+        stage2_lyrics._save_transcript(
+            context, "he", [], vocals_detected=False, audio_input="mix"
+        )
         context.params["choice"] = "instrumental"
 
         stage2_lyrics.run(context)
@@ -214,7 +216,9 @@ class TestExplicitChoice:
 
 class TestTranscriptCache:
     def test_the_vad_verdict_survives_the_cache(self, context):
-        stage2_lyrics._save_transcript(context, "en", [], vocals_detected=False)
+        stage2_lyrics._save_transcript(
+            context, "en", [], vocals_detected=False, audio_input="mix"
+        )
         assert stage2_lyrics._load_transcript(context) == ("en", [], False)
 
     def test_a_cache_from_before_the_flag_never_claims_silence(self, context):

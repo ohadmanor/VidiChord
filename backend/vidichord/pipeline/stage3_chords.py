@@ -22,10 +22,8 @@ Two things keep this stage fast:
 
 from __future__ import annotations
 
-import hashlib
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import numpy as np
 
@@ -35,7 +33,10 @@ from ..chords import engines
 from ..chords.fusion import FusionConfig, decode
 from ..config import ESSENTIA_BIN
 from ..models import Bar, Beat, ChordsDoc, SourceDoc
+from ..project import audio_fingerprint
 from . import StageContext
+
+__all__ = ["ENGINE_VERSION", "audio_fingerprint", "run"]
 
 
 def _load_audio(path: str) -> tuple[np.ndarray, float, np.ndarray, float]:
@@ -157,23 +158,6 @@ def _fuse_and_clean(
 #: Bump when any engine's output for the same audio can change (algorithm,
 #: sample rate, model), so re-runs stop trusting predictions it stored.
 ENGINE_VERSION = 1
-
-
-def audio_fingerprint(path: Path) -> str:
-    """A cheap identity for the audio file's content.
-
-    Size plus the first and last megabyte - enough to notice a re-added local
-    file whose content changed, without hashing a whole WAV.
-    """
-    digest = hashlib.md5()
-    size = path.stat().st_size
-    digest.update(str(size).encode())
-    with path.open("rb") as handle:
-        digest.update(handle.read(1 << 20))
-        if size > (1 << 20):
-            handle.seek(-min(size - (1 << 20), 1 << 20), 2)
-            digest.update(handle.read(1 << 20))
-    return digest.hexdigest()
 
 
 def _stored_engine_labels(bars: list[Bar]) -> dict[str, list[str]] | None:

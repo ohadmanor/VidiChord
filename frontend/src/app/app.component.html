@@ -77,6 +77,24 @@
             (input)="audioService.setVolume(+$any($event.target).value)"
           />
         </div>
+
+        <div class="mixer-anchor">
+          <button
+            class="icon-btn"
+            [class.active]="audioService.mixing()"
+            (click)="showMixer = !showMixer"
+            title="Stem mixer: vocals, drums, bass and the rest"
+          >
+            <svg lucideSliders></svg>
+          </button>
+          <div class="mixer-popover" *ngIf="showMixer">
+            <app-stem-mixer
+              [unavailable]="stems?.unavailable || ''"
+              [separating]="isSeparating"
+              (separate)="separateStems()"
+            ></app-stem-mixer>
+          </div>
+        </div>
       </div>
 
       <button class="icon-btn" (click)="showLibrary = !showLibrary; refreshLibrary()" title="Library">
@@ -111,11 +129,11 @@
           </div>
           <div class="library-stages">
             <span
-              *ngFor="let name of ['audio', 'lyrics', 'chords', 'sheet']"
+              *ngFor="let name of stageOrder"
               class="stage-pill"
               [attr.data-state]="song.stages[name]"
               [title]="name + ': ' + song.stages[name]"
-              >{{ name.charAt(0).toUpperCase() }}</span
+              >{{ stageInitials[name] }}</span
             >
           </div>
           <button class="icon-btn danger" (click)="deleteSong(song.song_id, $event)" title="Delete">
@@ -365,6 +383,26 @@
           <small class="muted">
             Used only when no cookies file is set. On Windows, firefox works; Chrome and
             Edge encrypt their cookie store so they cannot be read.
+          </small>
+        </label>
+
+        <label class="field">
+          <span>Separate every song into stems</span>
+          <span class="field-row">
+            <input type="checkbox" [(ngModel)]="config.stems_enabled" name="stemsEnabled" />
+            <input
+              type="text"
+              [(ngModel)]="config.stems_model"
+              name="stemsModel"
+              placeholder="htdemucs"
+            />
+          </span>
+          <small class="muted">
+            Splits each song into vocals, drums, bass and the rest, which the player
+            turns into faders and stage 2 transcribes instead of the full mix. It adds
+            a couple of minutes per song and needs Demucs installed
+            (<code>backend\.venv\Scripts\pip install demucs</code>); without it songs
+            import exactly as before. The box on the right names the model.
           </small>
         </label>
 

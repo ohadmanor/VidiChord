@@ -11,10 +11,12 @@ REM  Steps 1 and 2 skip themselves once their work is done, so an ordinary
 REM  launch goes straight to the app.
 REM
 REM  Usage:
-REM    devops\scripts\run_local.bat [--reinstall] [--rebuild] [--no-pause]
+REM    devops\scripts\run_local.bat [--reinstall] [--rebuild] [--with-stems]
+REM                                 [--no-pause]
 REM
 REM      --reinstall    discard backend\.venv and build it again
 REM      --rebuild      rebuild the Angular app even if it is already built
+REM      --with-stems   also install Demucs, for source separation (~400 MB)
 REM      --no-pause     do not wait for a keypress on failure (for CI)
 REM ==========================================================================
 setlocal EnableExtensions EnableDelayedExpansion
@@ -27,6 +29,7 @@ set "PY=%ROOT%\backend\.venv\Scripts\python.exe"
 set "FRONTEND_OUT=%ROOT%\frontend\dist\frontend\browser"
 set "REINSTALL=0"
 set "REBUILD=0"
+set "WITH_STEMS=0"
 set "NO_PAUSE=0"
 set "STEP=0"
 set "RC=0"
@@ -38,6 +41,7 @@ set "PYTHONIOENCODING=utf-8"
 :parse_args
 if "%~1"=="" goto args_done
 if /i "%~1"=="--reinstall" (set "REINSTALL=1" & shift & goto parse_args)
+if /i "%~1"=="--with-stems" (set "WITH_STEMS=1" & shift & goto parse_args)
 if /i "%~1"=="--rebuild"   (set "REBUILD=1"   & shift & goto parse_args)
 if /i "%~1"=="--no-pause"  (set "NO_PAUSE=1"  & shift & goto parse_args)
 if /i "%~1"=="--help" goto usage
@@ -217,6 +221,33 @@ if errorlevel 1 (
 :madmom_ready
 echo madmom is available: downbeat tracking and all three chord engines.
 :madmom_done
+
+REM Demucs is optional in the other direction from madmom: it installs without
+REM a compiler and without any coaxing, but it brings PyTorch - about 400 MB -
+REM so nobody gets it who did not ask. With it, every song is split into
+REM vocals, drums, bass and other; the player mixes them and the lyrics are
+REM timed against the isolated vocal.
+"%PY%" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('demucs') else 1)" 2>nul
+if not errorlevel 1 (
+    echo Stem separation is available.
+    goto :eof
+)
+
+if "%WITH_STEMS%"=="0" (
+    echo Stem separation is not installed. Add it with --with-stems, or:
+    echo   backend\.venv\Scripts\pip install demucs
+    goto :eof
+)
+
+echo Installing Demucs and PyTorch. This downloads a few hundred megabytes.
+"%PY%" -m pip install --disable-pip-version-check demucs
+if errorlevel 1 (
+    echo.
+    echo Demucs could not be installed. VidiChord still runs: songs import as
+    echo they always did, with no stems and the lyrics timed against the mix.
+    goto :eof
+)
+echo Stem separation is available.
 goto :eof
 
 :step

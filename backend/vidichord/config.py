@@ -109,6 +109,8 @@ class Settings:
                  sheets_dir: str | os.PathLike[str] | None = None,
                  cookies_file: str | os.PathLike[str] | None = None,
                  cookies_browser: str | None = None,
+                 stems_enabled: bool = True,
+                 stems_model: str = "",
                  path: Path | None = None) -> None:
         self.library_dir = Path(library_dir) if library_dir else DEFAULT_LIBRARY_DIR
         # Empty means "not configured"; export refuses to run until it is set.
@@ -119,18 +121,26 @@ class Settings:
         #: A browser to read those cookies from instead, e.g. "firefox" or
         #: "chrome:Profile 1". Ignored when ``cookies_file`` is set.
         self.cookies_browser = (cookies_browser or "").strip()
+        #: Whether to separate every song into stems. It costs minutes per
+        #: song and needs an optional dependency, so it is worth being able to
+        #: turn off without editing the environment.
+        self.stems_enabled = bool(stems_enabled)
+        #: Which Demucs model to separate with. Empty means the default.
+        self.stems_model = (stems_model or "").strip()
         #: Where :meth:`save` writes. Overridable so tests never touch the
         #: user's real config file.
         self.path = Path(path) if path else CONFIG_PATH
 
     # -- serialisation -----------------------------------------------------
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "library_dir": str(self.library_dir),
             "sheets_dir": str(self.sheets_dir) if self.sheets_dir else "",
             "cookies_file": str(self.cookies_file) if self.cookies_file else "",
             "cookies_browser": self.cookies_browser,
+            "stems_enabled": self.stems_enabled,
+            "stems_model": self.stems_model,
         }
 
     @classmethod
@@ -140,6 +150,10 @@ class Settings:
             sheets_dir=data.get("sheets_dir") or None,
             cookies_file=data.get("cookies_file") or None,
             cookies_browser=data.get("cookies_browser") or None,
+            # Absent means on: a config file written before separation existed
+            # should behave like every fresh install does.
+            stems_enabled=bool(data.get("stems_enabled", True)),
+            stems_model=data.get("stems_model") or "",
             path=path,
         )
 

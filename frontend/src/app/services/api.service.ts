@@ -10,6 +10,8 @@ import {
   SongDetail,
   SongSummary,
   SourceDoc,
+  StemName,
+  StemsDoc,
 } from '../models/artifacts';
 
 /**
@@ -104,6 +106,17 @@ export class ApiService {
 
   getSource(songId: string): Promise<SourceDoc> {
     return this.request(`/api/songs/${encodeURIComponent(songId)}/source`);
+  }
+
+  /**
+   * What separation produced for this song.
+   *
+   * A document with `unavailable` set is the ordinary answer on a machine
+   * without Demucs: it says why there are no stems rather than leaving the
+   * player to guess. 404 means stage 5 has not run at all yet.
+   */
+  getStems(songId: string): Promise<StemsDoc> {
+    return this.request(`/api/songs/${encodeURIComponent(songId)}/stems`);
   }
 
   getLyrics(songId: string): Promise<LyricsDoc> {
@@ -254,6 +267,11 @@ export class ApiService {
 
   audioUrl(songId: string): string {
     return `${this.baseUrl}/api/songs/${encodeURIComponent(songId)}/audio`;
+  }
+
+  /** One separated part. The server decides the file, so the format is its business. */
+  stemUrl(songId: string, name: StemName): string {
+    return `${this.baseUrl}/api/songs/${encodeURIComponent(songId)}/stems/${name}`;
   }
 
   exportToSongbook(songId: string): Promise<{ filename: string; path: string }> {

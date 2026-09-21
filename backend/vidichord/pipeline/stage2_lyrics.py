@@ -4,6 +4,11 @@ Whisper hears *when* words are sung accurately but *what* is sung poorly, and
 published lyrics are the reverse. So the transcript is used purely as a timing
 reference and the words come from LRClib or Genius, aligned onto it.
 
+What gets transcribed is the separated vocal when stage 5 produced one, and
+the full mix otherwise. Whisper was trained on speech rather than on a band,
+so an isolated voice is where its word timings are at their best - and those
+timings are the whole of what this stage keeps from it.
+
 Three things this stage guarantees for later stages:
 
 * the language is identified once, and only the matching model transcribes;
@@ -25,7 +30,8 @@ from ..lyrics import providers, structure
 from ..lyrics.normalize import normalize_word
 from ..lyrics import whisper_engine
 from ..lyrics.whisper_engine import WhisperEngine
-from ..models import LyricLine, LyricsDoc, LyricsSource, SourceDoc, Word
+from ..models import LyricLine, LyricsDoc, LyricsSource, SourceDoc, StemsDoc, Word
+from ..project import audio_fingerprint
 from . import NeedsUserInput, StageContext
 
 #: Cache of the Whisper transcript, so a re-run need not transcribe again.
@@ -56,13 +62,52 @@ _TRAILING_LINE_SECONDS = 4.0
 #: anything longer is a genuine break in the singing.
 _MAX_GAP_TO_ABSORB = 4.0
 
+#: A separated vocal quieter than this holds nothing but bleed from the band -
+#: the strongest evidence available that a song is instrumental. Still only a
+#: hint: whether a song has words is the user's call, never this module's.
+_SILENT_VOCAL_DB = -45.0
+
+
+# ---------------------------------------------------------------------------
+# What gets transcribed
+# ---------------------------------------------------------------------------
+
+
+def _stems(context: StageContext) -> StemsDoc | None:
+    """The song's stems, if they exist and still describe the audio on disk.
+
+    A stale fingerprint means the audio was replaced after separation - a
+    re-added local file, say - so the stems are of another recording, and
+    transcribing them would time a performance nobody is going to hear.
+    """
+    document = context.project.read_optional(StemsDoc)
+    if document is None or not document.separated:
+        return None
+    if document.audio_fingerprint != audio_fingerprint(context.project.audio_path):
+        return None
+    return document
+
+
+def _transcription_input(context: StageContext) -> tuple[str, str]:
+    """``(path, kind)`` of the audio to transcribe: the vocal, or the mix."""
+    document = _stems(context)
+    if document is not None:
+        relative = document.path_for("vocals")
+        if relative:
+            candidate = context.project.root / relative
+            if candidate.is_file():
+                return str(candidate), "vocals"
+    return str(context.project.audio_path), "mix"
+
 
 # ---------------------------------------------------------------------------
 # Transcript caching
 # ---------------------------------------------------------------------------
 
 
-def _load_transcript(context: StageContext) -> tuple[str, list[dict], bool] | None:
+def _load_transcript(
+    context: StageContext, expected_input: str | None = None
+) -> tuple[str, list[dict], bool] | None:
     """A cached transcript, if one exists that this build still trusts.
 
     The detector that chose the language is recorded alongside it, because a
@@ -71,6 +116,11 @@ def _load_transcript(context: StageContext) -> tuple[str, list[dict], bool] | No
     steps recovers from it. When the detector changes, everything it decided
     has to be decided again - so a transcript written by a different one, or
     by a build too old to say which, is discarded rather than reused.
+
+    What was fed to Whisper is recorded for the same reason. A transcript of
+    the full mix is not the transcript this stage would produce now that a
+    separated vocal exists, so ``expected_input`` discards it instead of
+    letting the worse timings outlive the separation.
     """
     path = context.project.root / TRANSCRIPT_FILENAME
     if not path.is_file():
@@ -83,6 +133,9 @@ def _load_transcript(context: StageContext) -> tuple[str, list[dict], bool] | No
 
     if data.get("detector") != whisper_engine.DETECTION_MODEL:
         return None
+    # Transcripts written before separation existed were made from the mix.
+    if expected_input is not None and data.get("input", "mix") != expected_input:
+        return None
     # Transcripts from before the flag existed default to True: a cache must
     # never be what quietly declares a song instrumental.
     return (
@@ -93,13 +146,18 @@ def _load_transcript(context: StageContext) -> tuple[str, list[dict], bool] | No
 
 
 def _save_transcript(
-    context: StageContext, language: str, segments: list[dict], vocals_detected: bool
+    context: StageContext,
+    language: str,
+    segments: list[dict],
+    vocals_detected: bool,
+    audio_input: str,
 ) -> None:
     path = context.project.root / TRANSCRIPT_FILENAME
     with path.open("w", encoding="utf-8") as handle:
         json.dump(
             {
                 "detector": whisper_engine.DETECTION_MODEL,
+                "input": audio_input,
                 "language": language,
                 "segments": segments,
                 "vocals_detected": vocals_detected,
@@ -112,9 +170,10 @@ def _save_transcript(
 def _transcribe(context: StageContext) -> tuple[str, list[dict], bool]:
     """Transcribe the audio, reusing a cached transcript when one exists."""
     requested = context.param("language")
+    audio_path, audio_input = _transcription_input(context)
 
     if not context.param("retranscribe", False):
-        cached = _load_transcript(context)
+        cached = _load_transcript(context, expected_input=audio_input)
         # A cached transcript in the wrong language is worse than useless: it
         # was produced by the wrong model. Asking for a specific language has
         # to override the cache.
@@ -128,17 +187,26 @@ def _transcribe(context: StageContext) -> tuple[str, list[dict], bool]:
                 None,
             )
 
+    if audio_input == "vocals":
+        context.report("Transcribing the separated vocal.", None)
+
     engine = WhisperEngine()
     prompt = context.param("lyrics") if context.param("choice") == "manual" else None
 
     transcript = engine.transcribe(
-        str(context.project.audio_path),
+        audio_path,
         language=context.param("language"),
         initial_prompt=prompt,
         on_progress=lambda message: context.report(message, None),
     )
     segments = transcript.as_dicts()
-    _save_transcript(context, transcript.language, segments, transcript.vocals_detected)
+    _save_transcript(
+        context,
+        transcript.language,
+        segments,
+        transcript.vocals_detected,
+        audio_input,
+    )
     return transcript.language, segments, transcript.vocals_detected
 
 
@@ -392,6 +460,33 @@ def _has_words(segments: list[dict]) -> bool:
     return any(str(segment.get("text", "")).strip() for segment in segments)
 
 
+def _instrumental_hint(
+    context: StageContext, segments: list[dict], vocals_detected: bool
+) -> str:
+    """How to describe a failed lookup, given what the audio suggests.
+
+    A hint, never a verdict. Only the user knows whether a song has words at
+    all, so this decides the wording of the question and nothing else.
+
+    A separated vocal is the better evidence when there is one: a track with
+    singing on it produces a loud vocals stem, and a track without produces
+    near silence. Voice activity over the full mix is the weaker fallback -
+    it is judging a voice through a band.
+    """
+    document = _stems(context)
+    if document is not None and document.vocals_rms_db <= _SILENT_VOCAL_DB:
+        return (
+            "No lyrics were found online, and the separated vocal track is "
+            "silent - this song looks instrumental. "
+        )
+    if not _has_words(segments) or not vocals_detected:
+        return (
+            "No lyrics were found online, and no clear vocals were detected - "
+            "this song may be instrumental. "
+        )
+    return "No lyrics were found online. "
+
+
 def _publish(project, document: LyricsDoc) -> None:
     """Write the lyrics document and echo its identity onto the manifest."""
     project.write(document)
@@ -498,15 +593,9 @@ def run(context: StageContext) -> None:
             # at all. When the audio itself suggests there are none, say so -
             # a track the VAD called silent has a transcript of hallucinated
             # filler, and "use the transcript" should be picked knowing that.
-            if not _has_words(segments) or not vocals_detected:
-                hint = (
-                    "No lyrics were found online, and no clear vocals were "
-                    "detected - this song may be instrumental. "
-                )
-            else:
-                hint = "No lyrics were found online. "
             raise NeedsUserInput(
-                hint + "Continue with the transcript as is, paste the lyrics, "
+                _instrumental_hint(context, segments, vocals_detected)
+                + "Continue with the transcript as is, paste the lyrics, "
                 "or mark the song instrumental.",
                 options=["ai", "manual", "instrumental"],
             )

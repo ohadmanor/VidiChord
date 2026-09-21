@@ -45,6 +45,34 @@ export interface SourceDoc {
   downloaded_at: string;
 }
 
+// --- stage 5, which runs between stages 1 and 2 ----------------------------
+
+/** The four parts the separator splits a mix into. */
+export type StemName = 'vocals' | 'drums' | 'bass' | 'other';
+
+export const STEM_NAMES: StemName[] = ['vocals', 'drums', 'bass', 'other'];
+
+export interface StemFile {
+  name: StemName;
+  /** Path relative to the song folder, e.g. `stems/vocals.ogg`. */
+  filename: string;
+  bytes: number;
+}
+
+export interface StemsDoc {
+  model: string;
+  device: string;
+  format: string;
+  duration: number;
+  /** Loudness of the isolated vocal; near silence means an instrumental. */
+  vocals_rms_db: number;
+  audio_fingerprint: string;
+  separated_at: string;
+  stems: StemFile[];
+  /** Empty when separation ran; otherwise why it did not, in words to show. */
+  unavailable: string;
+}
+
 // --- stage 2 ---------------------------------------------------------------
 
 export interface Word {
@@ -174,6 +202,8 @@ export interface SongSummary {
   language: string;
   updated_at: string;
   has_audio: boolean;
+  /** Whether this song has stems the player can mix. */
+  has_stems: boolean;
   stages: Record<string, StageState>;
 }
 
@@ -185,8 +215,24 @@ export interface StageStatus {
   error: string;
 }
 
-/** The four stages, by the names the manifest and the summary use. */
-export type StageName = 'audio' | 'lyrics' | 'chords' | 'sheet';
+/** The stages, by the names the manifest and the summary use. */
+export type StageName = 'audio' | 'stems' | 'lyrics' | 'chords' | 'sheet';
+
+/**
+ * The order the stages run in, which is not the order they are numbered in.
+ * Separation was added last and took stage number 5, but it runs second - see
+ * `DEFAULT_ORDER` in `backend/vidichord/pipeline/__init__.py`.
+ */
+export const STAGE_ORDER: StageName[] = ['audio', 'stems', 'lyrics', 'chords', 'sheet'];
+
+/** One-letter pills, because two of the five stages start with an S. */
+export const STAGE_INITIALS: Record<StageName, string> = {
+  audio: 'A',
+  stems: 'M',
+  lyrics: 'L',
+  chords: 'C',
+  sheet: 'S',
+};
 
 export interface Manifest {
   song_id: string;
@@ -220,6 +266,10 @@ export interface AppConfig {
   cookies_file: string;
   /** A browser to read those cookies from instead. */
   cookies_browser: string;
+  /** Whether to separate every song into stems. Costs minutes per song. */
+  stems_enabled: boolean;
+  /** Which Demucs model to separate with; empty means the default. */
+  stems_model: string;
 }
 
 // --- tuning ----------------------------------------------------------------

@@ -1,0 +1,144 @@
+.mixer {
+  width: 320px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: var(--font-sans);
+  color: var(--text-main);
+}
+
+.mixer-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.small {
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.mixer-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mixer-action {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--primary);
+  color: var(--on-accent);
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.mixer-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mixer-error {
+  margin: 0;
+  color: #b3261e;
+  font-size: 0.78rem;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.presets button {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--inset-bg);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.presets button:hover {
+  color: var(--text-main);
+  border-color: var(--primary);
+}
+
+.faders {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fader {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'head head'
+    'slider buttons';
+  gap: 4px 8px;
+  align-items: center;
+}
+
+/* A part silenced by somebody else's solo still shows its own setting. */
+.fader.silenced .fader-name,
+.fader.silenced .fader-value {
+  opacity: 0.45;
+}
+
+.fader-head {
+  grid-area: head;
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+}
+
+.fader-name {
+  font-weight: 500;
+}
+
+.fader-value {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+.fader input {
+  grid-area: slider;
+  width: 100%;
+}
+
+.fader-buttons {
+  grid-area: buttons;
+  display: flex;
+  gap: 4px;
+}
+
+.fader-buttons button {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--inset-bg);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fader-buttons button.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-accent);
+}

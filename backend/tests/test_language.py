@@ -79,7 +79,9 @@ def test_a_transcript_from_this_detector_is_reused(tmp_path):
     from vidichord.pipeline import stage2_lyrics
 
     context = _context(_project(tmp_path))
-    stage2_lyrics._save_transcript(context, "he", [{"text": "שלום"}], vocals_detected=True)
+    stage2_lyrics._save_transcript(
+        context, "he", [{"text": "שלום"}], vocals_detected=True, audio_input="mix"
+    )
 
     assert stage2_lyrics._load_transcript(context) == ("he", [{"text": "שלום"}], True)
 

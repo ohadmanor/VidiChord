@@ -10,11 +10,13 @@ import {
   LucidePlay,
   LucideRefreshCw,
   LucideSettings,
+  LucideSliders,
   LucideVolume2,
   LucideX,
 } from '@lucide/angular';
 import { ChordGridComponent } from './components/chord-grid/chord-grid.component';
 import { SheetViewComponent } from './components/sheet-view/sheet-view.component';
+import { StemMixerComponent } from './components/stem-mixer/stem-mixer.component';
 import { WaveformComponent } from './components/waveform/waveform.component';
 import {
   AppConfig,
@@ -30,11 +32,17 @@ import {
   SheetDoc,
   SongDetail,
   SongSummary,
+  STAGE_INITIALS,
+  STAGE_ORDER,
   StageName,
+  StemName,
+  StemsDoc,
+  STEM_NAMES,
 } from './models/artifacts';
 import { ApiService } from './services/api.service';
 import { AudioService } from './services/audio.service';
 
+const MIXER_STORAGE_PREFIX = 'vidiChordMixer:';
 const FUSION_STORAGE_KEY = 'vidiChordFusionConfig';
 const CLEANUP_STORAGE_KEY = 'vidiChordCleanupConfig';
 const TUNING_VERSION_KEY = 'vidiChordTuningVersion';
@@ -96,6 +104,7 @@ const DEFAULT_CHOICE_REASON =
     WaveformComponent,
     SheetViewComponent,
     ChordGridComponent,
+    StemMixerComponent,
     LucideMusic,
     LucideLayers,
     LucideFileText,
@@ -105,6 +114,7 @@ const DEFAULT_CHOICE_REASON =
     LucideAlertCircle,
     LucideRefreshCw,
     LucideSettings,
+    LucideSliders,
     LucideX,
   ],
   templateUrl: './app.component.html',
@@ -116,6 +126,13 @@ export class AppComponent implements OnInit, OnDestroy {
   lyrics: LyricsDoc | null = null;
   chords: ChordsDoc | null = null;
   sheet: SheetDoc | null = null;
+  /** What separation produced, or why it produced nothing. Null before stage 5. */
+  stems: StemsDoc | null = null;
+  showMixer = false;
+
+  /** The stage pills, in the order the stages actually run. */
+  readonly stageOrder = STAGE_ORDER;
+  readonly stageInitials = STAGE_INITIALS;
 
   // --- run state -----------------------------------------------------------
   youtubeUrl = '';
@@ -177,6 +194,8 @@ export class AppComponent implements OnInit, OnDestroy {
     sheets_dir: '',
     cookies_file: '',
     cookies_browser: '',
+    stems_enabled: true,
+    stems_model: '',
   };
   fusion: FusionConfig = structuredClone(DEFAULT_FUSION);
   cleanup: CleanupConfig = structuredClone(DEFAULT_CLEANUP);
@@ -193,6 +212,22 @@ export class AppComponent implements OnInit, OnDestroy {
     effect(() => {
       this.audioService.setVolume(this.audioService.volume());
     }, { allowSignalWrites: true });
+
+    // Remember where the faders were left, per song. Reading the three
+    // signals is what subscribes this to every move of them.
+    effect(() => {
+      const state = {
+        levels: this.audioService.levels(),
+        muted: this.audioService.muted(),
+        soloed: this.audioService.soloed(),
+      };
+      if (!this.songId || !this.audioService.mixing()) return;
+      try {
+        localStorage.setItem(MIXER_STORAGE_PREFIX + this.songId, JSON.stringify(state));
+      } catch {
+        // A full or disabled store is no reason to stop playing.
+      }
+    });
   }
 
   async ngOnInit(): Promise<void> {
@@ -395,6 +430,8 @@ export class AppComponent implements OnInit, OnDestroy {
     this.lyrics = null;
     this.chords = null;
     this.sheet = null;
+    this.stems = null;
+    this.showMixer = false;
     this.lyricsText = '';
     this.job = null;
     this.view = 'review';
@@ -452,6 +489,9 @@ export class AppComponent implements OnInit, OnDestroy {
       this.view = sheet && !stale ? 'sheet' : 'review';
       this.dirty = stale && !!sheet;
       this.audioService.loadTrack(this.api.audioUrl(songId));
+      // The mixer replaces the mix once its four parts are decoded; until
+      // then, and on a song without stems, the element carries on playing.
+      void this.loadStems(songId);
       this.showLibrary = false;
       // Back to automatic, because the dropdown is about to describe a
       // different song. Carried over, it is sent as an override, and asking
@@ -724,6 +764,74 @@ export class AppComponent implements OnInit, OnDestroy {
     this.fusion = structuredClone(DEFAULT_FUSION);
     this.cleanup = structuredClone(DEFAULT_CLEANUP);
     this.persistTuning();
+  }
+
+  // --- stems ---------------------------------------------------------------
+
+  /**
+   * Load a song's stems into the player, when it has usable ones.
+   *
+   * A missing document means separation has not run for this song; one with
+   * `unavailable` set means it cannot, and says why - both leave the mix
+   * playing, which is what the player did before any of this existed.
+   */
+  private async loadStems(songId: string): Promise<void> {
+    this.stems = await this.api.getStems(songId).catch(() => null);
+    if (!this.stems || this.stems.unavailable || !this.stems.stems.length) return;
+
+    const available = new Set(this.stems.stems.map((stem) => stem.name));
+    const urls: Partial<Record<StemName, string>> = {};
+    for (const name of STEM_NAMES) {
+      if (available.has(name)) urls[name] = this.api.stemUrl(songId, name);
+    }
+
+    this.restoreMixerState(songId);
+    await this.audioService.loadStems(urls);
+  }
+
+  private restoreMixerState(songId: string): void {
+    try {
+      const stored = localStorage.getItem(MIXER_STORAGE_PREFIX + songId);
+      this.audioService.restoreMixerState(stored ? JSON.parse(stored) : {});
+    } catch {
+      this.audioService.restoreMixerState({});
+    }
+  }
+
+  /** Whether a run is separating this song right now. */
+  get isSeparating(): boolean {
+    return !!this.job && this.job.stage === 5 && !this.jobIsFinished;
+  }
+
+  private get jobIsFinished(): boolean {
+    return (
+      !this.job ||
+      this.job.state === 'done' ||
+      this.job.state === 'failed' ||
+      this.job.state === 'needs_input'
+    );
+  }
+
+  /**
+   * Separate this song, then re-time the lyrics against the isolated vocal.
+   *
+   * Cascading is the backend's own doing: stage 5 runs before stage 2 in the
+   * running order, so asking for it carries on through the transcription that
+   * reads what it produced.
+   */
+  async separateStems(): Promise<void> {
+    if (!this.songId || this.isSeparating) return;
+    this.error = '';
+    try {
+      const job = await this.api.rerunStage(this.songId, 5, {
+        fusion: this.fusion,
+        cleanup: this.cleanup,
+        review: true,
+      });
+      this.watch(job);
+    } catch (err) {
+      this.error = this.describe(err);
+    }
   }
 
   // --- playback ------------------------------------------------------------
