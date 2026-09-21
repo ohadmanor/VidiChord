@@ -39,7 +39,12 @@ numpy>=1.26
 scipy>=1.11
 
 # --- development ---
-# pytest>=8.0
+# Not needed to run the app, but needed to release it: the release build runs
+# the suite as step 4 and refuses to build from a red one, so a venv without
+# these fails with "No module named pytest" and blames the tests for it.
+# httpx is what fastapi.testclient runs on, and FastAPI does not pull it in.
+pytest>=8.0
+httpx>=0.27
 
 # --- madmom (optional) ---
 # Deliberately not listed here: it cannot be installed by a plain `pip install

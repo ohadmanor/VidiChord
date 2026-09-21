@@ -1,6 +1,6 @@
 @echo off
 REM ==========================================================================
-REM  VidiChord - full Windows release build.
+REM  VidiChord - set up, build, and package the Windows executable.
 REM
 REM  Produces release\VidiChord-<version>-win64.exe: one self-contained file
 REM  holding the Angular app, ffmpeg, the Essentia binaries, the madmom models
@@ -9,28 +9,31 @@ REM  installs - but it does need a JavaScript engine to download from YouTube,
 REM  which is a separate program and cannot be bundled. See the closing banner.
 REM
 REM  Steps, in order:
-REM    1  preflight        virtual environment, Node.js, npm
-REM    2  version          read from vidichord\__init__.py, the one source
-REM    3  build tools      PyInstaller, and the exe icon from the app logo
-REM    4  tests            the whole suite; a red test stops the release
-REM    5  ffmpeg           fetched now so it can be bundled, not downloaded
+REM    1  environment      backend\.venv, dependencies, and madmom if it builds
+REM    2  preflight        Node.js, npm, and what the build will bundle
+REM    3  version          read from vidichord\__init__.py, the one source
+REM    4  build tools      PyInstaller, and the exe icon from the app logo
+REM    5  tests            the whole suite; a red test stops the release
+REM    6  ffmpeg           fetched now so it can be bundled, not downloaded
 REM                        into a temporary folder on every launch
-REM    6  frontend         Angular, production configuration
-REM    7  executable       PyInstaller, single file
-REM    8  package          name, size, SHA256, and a real start-up check
+REM    7  frontend         Angular, production configuration
+REM    8  executable       PyInstaller, single file
+REM    9  package          name, size, SHA256, and a real start-up check
 REM
 REM  Usage:
-REM    release_windows.bat [--skip-tests] [--skip-smoke] [--no-pause]
+REM    devops\scripts\build_release.bat [--reinstall] [--skip-tests]
+REM                                     [--skip-smoke] [--no-pause]
 REM
+REM      --reinstall    discard backend\.venv and build it again
 REM      --skip-tests   do not run pytest first
 REM      --skip-smoke   do not launch the built exe to check that it starts
 REM      --no-pause     do not wait for a keypress at the end (for CI)
-REM
-REM  Run backend\setup.bat once before this: the release build uses that
-REM  virtual environment, it does not create one.
 REM ==========================================================================
 setlocal EnableExtensions EnableDelayedExpansion
-cd /d "%~dp0"
+REM This script lives in devops\scripts, so the repository root is two levels
+REM up. Every path below is derived from ROOT, so this one line is what ties the
+REM build to the tree it builds.
+cd /d "%~dp0..\.."
 
 set "ROOT=%CD%"
 set "PY=%ROOT%\backend\.venv\Scripts\python.exe"
@@ -40,14 +43,17 @@ set "FRONTEND_OUT=%ROOT%\frontend\dist\frontend\browser"
 set "SPEC=VidiChord_onefile.spec"
 set "PORT=8001"
 set "SMOKE_TIMEOUT=420"
+set "REINSTALL=0"
 set "SKIP_TESTS=0"
 set "SKIP_SMOKE=0"
 set "NO_PAUSE=0"
 set "STEP=0"
 set "RC=0"
+set "SCRATCH=%TEMP%\vidichord_release.txt"
 
 :parse_args
 if "%~1"=="" goto args_done
+if /i "%~1"=="--reinstall"  (set "REINSTALL=1"  & shift & goto parse_args)
 if /i "%~1"=="--skip-tests" (set "SKIP_TESTS=1" & shift & goto parse_args)
 if /i "%~1"=="--skip-smoke" (set "SKIP_SMOKE=1" & shift & goto parse_args)
 if /i "%~1"=="--no-pause"   (set "NO_PAUSE=1"   & shift & goto parse_args)
@@ -65,17 +71,22 @@ echo   VidiChord release build
 echo ==========================================================================
 
 
-REM --- 1. preflight ---------------------------------------------------------
-call :step "Preflight"
+REM --- 1. environment -------------------------------------------------------
+call :step "Environment"
 
+call :ensure_env
+if not "%RC%"=="0" goto fail_quiet
 if not exist "%PY%" goto no_venv
+
+
+REM --- 2. preflight ---------------------------------------------------------
+call :step "Preflight"
 
 where /q npm
 if errorlevel 1 goto no_npm
 
 REM Captured through a file rather than `for /f`: cmd mangles a command whose
 REM first token is a quoted path, which every call to the venv python is.
-set "SCRATCH=%TEMP%\vidichord_release.txt"
 "%PY%" -c "import sys;print(sys.version.split()[0])" > "%SCRATCH%" 2>nul
 set "PYVER="
 if exist "%SCRATCH%" set /p PYVER=<"%SCRATCH%"
@@ -85,6 +96,14 @@ echo Repository : %ROOT%
 echo Python     : %PYVER%  (backend\.venv)
 echo Node.js    : %NODEVER%
 
+REM yt-dlp goes stale faster than anything else here: YouTube retires the
+REM player clients it impersonates, and a frozen exe carries whatever was
+REM installed on build day. Worth seeing before shipping.
+"%PY%" -c "import yt_dlp;print(yt_dlp.version.__version__)" > "%SCRATCH%" 2>nul
+set "YTDLPVER="
+if exist "%SCRATCH%" set /p YTDLPVER=<"%SCRATCH%"
+echo yt-dlp     : %YTDLPVER%
+
 REM madmom needs Python 3.12 or older. Its absence is not an error - it costs
 REM downbeat tracking and one of the three chord engines. See README.md.
 "%PY%" -c "import madmom" 2>nul
@@ -93,12 +112,12 @@ echo madmom     : present, three chord engines will be bundled
 goto preflight_done
 :no_madmom
 echo madmom     : MISSING - the release will estimate bar lines and fuse two
-echo              chord engines instead of three. Run backend\setup.bat on
-echo              Python 3.12 to get it, or accept the reduced build.
+echo              chord engines instead of three. Re-run on Python 3.12 with a
+echo              C compiler to get it, or accept the reduced build.
 :preflight_done
 
 
-REM --- 2. version -----------------------------------------------------------
+REM --- 3. version -----------------------------------------------------------
 call :step "Version"
 
 set "VERSION="
@@ -111,7 +130,7 @@ set "EXE_NAME=VidiChord-%VERSION%-win64.exe"
 echo Building VidiChord %VERSION% as %EXE_NAME%
 
 
-REM --- 3. build tools -------------------------------------------------------
+REM --- 4. build tools -------------------------------------------------------
 call :step "Build tools"
 
 REM Pinned to 6.x: PyInstaller 7 has not been tried against this spec, and 6.x
@@ -131,7 +150,7 @@ if errorlevel 1 echo Icon conversion failed; the exe will use the default icon.
 :icon_ready
 
 
-REM --- 4. tests -------------------------------------------------------------
+REM --- 5. tests -------------------------------------------------------------
 call :step "Tests"
 
 if "%SKIP_TESTS%"=="1" goto tests_skipped
@@ -145,7 +164,7 @@ echo Skipped (--skip-tests).
 :tests_done
 
 
-REM --- 5. ffmpeg ------------------------------------------------------------
+REM --- 6. ffmpeg ------------------------------------------------------------
 call :step "ffmpeg"
 
 if exist "backend\ffmpeg\ffmpeg.exe" if exist "backend\ffmpeg\ffprobe.exe" goto ffmpeg_ready
@@ -163,7 +182,7 @@ echo Bundling backend\ffmpeg (ffmpeg.exe, ffprobe.exe).
 :ffmpeg_done
 
 
-REM --- 6. frontend ----------------------------------------------------------
+REM --- 7. frontend ----------------------------------------------------------
 call :step "Angular frontend"
 
 REM A stale dist would be bundled as-is, source maps and all, so start clean.
@@ -179,7 +198,7 @@ if not exist "%FRONTEND_OUT%\index.html" goto frontend_missing
 echo Built %FRONTEND_OUT%
 
 
-REM --- 7. executable --------------------------------------------------------
+REM --- 8. executable --------------------------------------------------------
 call :step "Single-file executable"
 echo This is the slow part: PyInstaller walks every dependency and compresses
 echo the lot into one file. Several minutes is normal.
@@ -195,7 +214,7 @@ cd /d "%ROOT%"
 if not exist "%RELEASE_DIR%\VidiChord.exe" goto exe_missing
 
 
-REM --- 8. package -----------------------------------------------------------
+REM --- 9. package -----------------------------------------------------------
 call :step "Package"
 
 set "EXE_PATH=%RELEASE_DIR%\%EXE_NAME%"
@@ -274,9 +293,8 @@ goto end
 REM --- failures -------------------------------------------------------------
 
 :no_venv
-echo No virtual environment at backend\.venv.
-echo Run backend\setup.bat first - it also installs madmom, which this build
-echo bundles when it is present.
+echo The environment step finished but backend\.venv\Scripts\python.exe is
+echo still missing. Re-run with --reinstall.
 goto fail
 
 :no_npm
@@ -337,10 +355,14 @@ echo hidden import in %SPEC% is the usual cause.
 goto fail
 
 :usage
-echo Usage: release_windows.bat [--skip-tests] [--skip-smoke] [--no-pause]
+echo Usage: devops\scripts\build_release.bat [--reinstall] [--skip-tests] [--skip-smoke] [--no-pause]
 echo.
-echo   Builds release\VidiChord-^<version^>-win64.exe, one self-contained file.
-echo   Run backend\setup.bat once first.
+echo   Sets up backend\.venv, builds the Angular app, and packages
+echo   release\VidiChord-^<version^>-win64.exe, one self-contained file.
+goto end
+
+:fail_quiet
+set "RC=1"
 goto end
 
 :fail
@@ -349,11 +371,98 @@ echo.
 echo Release build FAILED.
 goto end
 
+
+REM --- shared -----------------------------------------------------------------
+
+:ensure_env
+REM Create backend\.venv and install everything into it. Idempotent: an
+REM existing environment is reused, and --reinstall discards it first.
+REM
+REM Prefers Python 3.12, then 3.11: madmom - which supplies downbeat tracking
+REM and one of the three chord engines - cannot be built on 3.13 or newer. The
+REM app runs without it, in a reduced mode. See README.md.
+if "%REINSTALL%"=="1" if exist "%ROOT%\backend\.venv" (
+    echo Discarding the existing backend\.venv.
+    rd /s /q "%ROOT%\backend\.venv"
+)
+
+if exist "%PY%" (
+    echo Using the existing backend\.venv.
+    goto ensure_deps
+)
+
+set "BOOTPY="
+for %%V in (3.12 3.11 3.13) do (
+    if not defined BOOTPY (
+        py -%%V --version >nul 2>&1 && set "BOOTPY=py -%%V"
+    )
+)
+if not defined BOOTPY (
+    echo Could not find Python 3.11, 3.12 or 3.13 via the py launcher.
+    echo Falling back to whatever "python" resolves to.
+    set "BOOTPY=python"
+)
+echo Creating backend\.venv with: !BOOTPY!
+cd /d "%ROOT%\backend"
+!BOOTPY! -m venv .venv
+cd /d "%ROOT%"
+if not exist "%PY%" (
+    echo Failed to create backend\.venv.
+    set "RC=1"
+    goto :eof
+)
+
+:ensure_deps
+"%PY%" -m pip install --upgrade --disable-pip-version-check --quiet pip
+echo Installing dependencies from backend\requirements.txt.
+"%PY%" -m pip install --disable-pip-version-check -r "%ROOT%\backend\requirements.txt"
+if errorlevel 1 (
+    echo Dependency installation failed.
+    set "RC=1"
+    goto :eof
+)
+
+REM madmom is optional and awkward. All three of its quirks are handled here:
+REM  1. Its setup.py imports Cython without declaring it, so pip's isolated
+REM     build environment cannot see it - hence --no-build-isolation, which in
+REM     turn needs setuptools and wheel present in the venv.
+REM  2. The PyPI sdist ships C files generated by an old Cython that include
+REM     longintrepr.h, a header Python 3.12 removed. Installing from git means
+REM     there are no stale C files and Cython regenerates them.
+REM  3. It needs NumPy 1.x at build time.
+"%PY%" -c "import madmom" 2>nul
+if not errorlevel 1 goto madmom_ready
+
+"%PY%" -c "import sys; sys.exit(0 if sys.version_info < (3, 13) else 1)"
+if errorlevel 1 (
+    echo Skipping madmom: it cannot be built on Python 3.13 or newer.
+    goto madmom_done
+)
+
+echo Installing madmom. This needs a C compiler and takes a minute.
+"%PY%" -m pip install --disable-pip-version-check --quiet setuptools wheel "cython>=3.0" "numpy<2"
+"%PY%" -m pip install --disable-pip-version-check --no-build-isolation "git+https://github.com/CPJKU/madmom.git"
+if errorlevel 1 (
+    echo.
+    echo madmom could not be installed. This usually means the Microsoft C++
+    echo Build Tools are missing. Install them with:
+    echo   winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools"
+    echo.
+    echo VidiChord still builds: bar lines are estimated rather than tracked,
+    echo and chords are fused from two engines instead of three.
+    goto madmom_done
+)
+
+:madmom_ready
+echo madmom is available: downbeat tracking and all three chord engines.
+:madmom_done
+goto :eof
+
 :step
 set /a STEP+=1
 echo.
 echo --------------------------------------------------------------------------
-echo   [!STEP!/8] %~1
+echo   [!STEP!/9] %~1
 echo --------------------------------------------------------------------------
 goto :eof
 

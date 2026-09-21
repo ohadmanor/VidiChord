@@ -99,12 +99,16 @@ there. Without it VidiChord still runs, with bar lines estimated from onset
 energy rather than tracked and chords fused from two engines instead of three.
 
 ```bat
-cd backend
-setup.bat            :: creates .venv and installs dependencies
-start_backend.bat    :: launches the app and opens a browser
+devops\scripts\run_local.bat
 ```
 
-`setup.bat` handles madmom's three quirks: its `setup.py` imports Cython
+That one command sets up `backend/.venv`, builds the Angular app and starts
+the server. It finds the repository itself, so it works from any directory,
+and it skips the first two steps once they are done — an ordinary launch goes
+straight to the app. Pass `--reinstall` to rebuild the environment or
+`--rebuild` to rebuild the interface.
+
+It handles madmom's three quirks: its `setup.py` imports Cython
 without declaring it (so the build runs with `--no-build-isolation`), the PyPI
 sdist ships C files including `longintrepr.h` which Python 3.12 removed (so it
 installs from git and lets Cython regenerate them), and it needs NumPy 1.x at
@@ -150,9 +154,10 @@ plus two optional keys for identifying YouTube requests, described below:
 - `cookies_file` — a Netscape-format cookie jar to send with them
 - `cookies_browser` — a browser to read those cookies from instead
 
-The file is gitignored. Copy `config.example.json` to start. It holds no
-secrets, and VidiChord needs no API keys at all — lyrics come from LRClib and
-Genius, both open, and transcription runs locally.
+The file is gitignored and optional: every key defaults, and the app writes
+the file itself the first time settings are saved. It holds no secrets, and
+VidiChord needs no API keys at all — lyrics come from LRClib and Genius, both
+open, and transcription runs locally.
 
 ### When YouTube says "Sign in to confirm you're not a bot"
 
@@ -208,14 +213,14 @@ Environment variables:
 ## Releasing
 
 ```bat
-release_windows.bat
+devops\scripts\build_release.bat
 ```
 
-One command, from the repository root, to the file you hand someone:
-`release/VidiChord-<version>-win64.exe`. It needs a `.venv` from
-`backend/setup.bat` and npm on `PATH`; everything else it arranges itself.
+One command, run from anywhere, to the file you hand someone:
+`release/VidiChord-<version>-win64.exe`. It sets up the environment itself
+and needs only npm on `PATH`; everything else it arranges.
 
-Eight steps, and it stops at the first one that fails:
+Nine steps, and it stops at the first one that fails:
 
 | | | |
 |---|---|---|
@@ -249,10 +254,6 @@ unscrambling them means running the player's own code, so a machine with no
 Node.js (or Deno, Bun or QuickJS) can open local audio files but not download
 from YouTube. Installing Node.js is the usual answer; dropping `node.exe` beside
 `VidiChord.exe` also works, since that folder is searched.
-
-`backend/VidiChord.spec` builds the same app as a folder instead. It starts in
-seconds because nothing is unpacked, and it is the better choice for anything
-but handing over a single file.
 
 Settings and the song library are written next to the exe, not into the
 extraction directory that would take them with it when the app exits — so keep
@@ -289,9 +290,9 @@ The suite covers the pure logic — alignment, structure recovery, chord
 vocabulary, fusion, noise cleanup, chord layout, instrumental detection,
 export and the HTTP API — and needs no audio.
 
-Fixture WAVs live in `backend/tests/fixtures/audio/` and are gitignored;
-`chords_baseline/` holds the chord output from before the pipeline rewrite, so
-noise improvements can be measured rather than eyeballed:
+The noise numbers below were measured once, against chord output saved from
+before the pipeline rewrite, so the improvement could be counted rather than
+eyeballed. They are a record, not something the suite re-runs:
 
 | Song | Before | After |
 |---|---|---|
@@ -313,54 +314,148 @@ RNN beat tracker and CNN chord model both run over the full audio.
 
 Noise metrics say how *tidy* the chords are, not how *right* they are — a config
 that returns one chord for the whole song scores perfectly. Correctness needs
-reference sheets to compare against, and `backend/tools/` does that:
+reference sheets to compare against, and `backend/tools/` holds them.
+
+`tools/reference.json` is the ground truth: 15 songs, 7,476 beats, each keyed to
+the YouTube video it was taken from. **It cannot be regenerated.** It was parsed
+from hand-verified Chordify PDF exports that were never committed and no longer
+exist, so treat the file as source, not as output. Nothing else can stand in for
+it: the pipeline's own `03_chords.json` is the estimate being scored, so using
+that would make the objective circular.
+
+Running the tuner needs two things that a fresh checkout does not have:
 
 ```bat
 cd backend
-python -m tools.chordify_reference ..\songs -o tools\reference.json
+.venv\Scripts\pip install optuna
 python -m tools.tune_chords tools\reference.json --trials 500 --report
 ```
 
-The first reads verified Chordify PDF exports into a beat-indexed reference
-(each export names the YouTube video it came from, so it is tied to the exact
-audio). The second searches the fusion and cleanup settings with Optuna and
-reports duration-weighted agreement, holding out a third of the songs.
+and a song library holding the 15 reference songs. The tuner matches them by
+the `video_id` in each entry, so re-importing those videos and running stages 1
+and 3 restores its input; songs it cannot find are listed as skipped, and it
+refuses to run a search on too few.
 
 It is fast because it never re-runs the engines: every beat's per-engine
 prediction is stored on `03_chords.json`, so a trial re-fuses stored numbers in
 milliseconds. Only fusion and cleanup are reachable this way — the beat grid,
-the detected key and the engines' own constants are baked into those labels.
+the detected key and the engines' own constants are baked into those labels. The
+search itself takes minutes; re-importing the songs to feed it takes hours.
 
 The current defaults came from 15 verified songs: **72.0% → 77.7%** agreement at
 majmin level, 74.1% → 78.1% on held-out songs, with every song improving. Most
-of that is the engine weights alone. Note that the search will always try to
+of that is the engine weights alone, and only those were adopted — the search's
+key-prior and cleanup values were judged by hand and rejected, so `cleanup.py`'s
+defaults are hand-chosen rather than searched. The search will always try to
 switch cleanup off, because the objective cannot see flicker — that buys about
 1.7 points while pushing short runs from 0% to ~20%, which is why `--report`
 prints the noise metrics next to the accuracy. Judge both.
 
+A third script, `tools/chordify_reference.py`, parsed those PDF exports into
+`reference.json`. It was removed once its input was gone, because it wrote its
+output unconditionally and so would overwrite the ground truth with an empty
+file. If you ever export Chordify sheets again, recover it with
+`git show 0769afd:backend/tools/chordify_reference.py` — and commit the PDFs
+this time, since the `*.pdf` rule in `.gitignore` is what lost them.
+
 ### Layout
+
+Every file in the repository, and what it is for.
 
 ```
 backend/
-  main.py                    entry point
+  main.py                           entry point
+  requirements.txt                  Python dependencies and their version floors
+  VidiChord_onefile.spec            PyInstaller single-file release build, version-stamped
   vidichord/
-    config.py                settings and paths
-    models.py                schemas for the four artifacts
-    project.py               per-song folders and artifact I/O
-    jobs.py                  background runs and progress
-    server.py                FastAPI routes
-    pipeline/stage{1..4}_*.py
-    lyrics/                  whisper, providers, structure, alignment
-    chords/                  beats, engines, fusion, cleanup, vocabulary
-    sheet/                   layout, instrumentals, bar charts, export
-    vendor/essentia/         bundled binaries
-  tools/                     reference parsing and chord-config tuning
+    __init__.py                     package root and version number
+    config.py                       settings and paths
+    models.py                       schemas for the four artifacts
+    project.py                      per-song folders and artifact I/O
+    jobs.py                         background runs and progress
+    server.py                       FastAPI routes
+    pipeline/
+      __init__.py                   stage runner, shared context and progress
+      stage1_audio.py               YouTube or local audio into WAV
+      stage2_lyrics.py              transcript, official lyrics, word timings and sections
+      stage3_chords.py              three chord engines fused onto a beat grid
+      stage4_sheet.py               interleaves lyrics and chords into sheet blocks
+    lyrics/
+      __init__.py                   public exports for the lyrics package
+      whisper_engine.py             Whisper transcription and language detection
+      providers.py                  official lyrics from LRClib and Genius
+      structure.py                  verse and chorus section detection
+      align.py                      timing official lyrics against the transcript
+      normalize.py                  Hebrew-aware comparison keys for word matching
+    chords/
+      __init__.py                   package exports for chord recognition
+      beats.py                      beat and downbeat tracking
+      engines.py                    the three engines, reduced to beat labels
+      fusion.py                     HMM fusion of the engines' predictions
+      cleanup.py                    chord noise removal and its metrics
+      vocabulary.py                 chord spelling, parsing and key theory
+      _madmom_compat.py             compatibility shims for importing madmom
+    sheet/
+      __init__.py                   re-exports for sheet assembly
+      layout.py                     aligning chords above lyrics by column
+      instrumental.py               detecting intros, solos, interludes and outros
+      bars.py                       bar-chart notation for instrumental passages
+      export.py                     songbook text and JSON output
+    vendor/
+      __init__.py                   package marker for bundled binaries
+      essentia/                     bundled Essentia extractor and its DLLs
+  tools/
+    reference.json                  beat-level chord ground truth, 15 songs
+    tune_chords.py                  Optuna search for fusion and cleanup settings
+  tests/
+    conftest.py                     puts backend/ on the test import path
+    test_align.py                   lyric-to-transcript alignment and line timing
+    test_audio.py                   YouTube cookie, retry and JavaScript engine tests
+    test_chords.py                  chord vocabulary, key, fusion and cleanup tests
+    test_instrumental.py            lyrics-not-found prompt and instrumental sheets
+    test_language.py                sung language detection and transcript cache
+    test_lookup.py                  YouTube title to search query variants
+    test_project.py                 song id, artifact I/O and manifest tests
+    test_server.py                  FastAPI route, audio range and review tests
+    test_sheet.py                   chord placement, instrumentals and export
+    test_structure.py               verse and chorus structure recovery
 frontend/
-  src/app/
-    models/artifacts.ts      mirrors the backend schemas
-    services/                api client, audio player
-    components/sheet-view/   renders the sheet
-    components/chord-grid/   edits the chord grid
+  package.json                      npm dependencies and build scripts
+  angular.json                      Angular CLI build and serve configuration
+  tsconfig.json                     TypeScript and Angular compiler options
+  tsconfig.app.json                 TypeScript settings for the application build
+  .editorconfig                     editor whitespace and quote conventions
+  .gitignore                        Angular's own ignores: dist, cache, editors
+  README.md                         stock Angular CLI usage notes
+  public/VidiChord.png              app logo, used as favicon and header mark
+  src/
+    main.ts                         browser entry point, bootstraps the Angular app
+    index.html                      host page holding app-root, title and favicon
+    styles.css                      design tokens, fonts and four colour themes
+    app/
+      app.component.ts              shell: starts runs, follows jobs, saves edits
+      app.component.html            toolbar, library, review panes, sheet, settings
+      app.component.css             shell layout: header, player, library, modals
+      app.config.ts                 bootstrap providers and change-detection setup
+      models/artifacts.ts           mirrors the backend schemas, plus tuning defaults
+      services/api.service.ts       backend REST client and job progress stream
+      services/audio.service.ts     audio playback and transport state as signals
+      components/sheet-view/
+        sheet-view.component.ts     renders and edits the finished song sheet
+        sheet-view.component.html   title block, chord rows over lyric rows
+        sheet-view.component.css    songbook page styling, right-to-left included
+      components/chord-grid/
+        chord-grid.component.ts     editable beat grid; halve or double the tempo
+        chord-grid.component.html   bar cards and editable beat cells
+        chord-grid.component.css    styling for bar cards, repeats and silent beats
+      components/waveform/
+        waveform.component.ts       decorative canvas bars behind the scrubber
+devops/
+  scripts/
+    run_local.bat                   sets up, builds, and runs the app locally
+    build_release.bat               sets up, builds, and packages the exe
+.gitignore                          keeps build output, venvs and local config out of git
+.gitattributes                      keeps CRLF line endings on batch files
 ```
 
 ### API

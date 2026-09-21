@@ -157,12 +157,11 @@ def test_every_supported_javascript_engine_is_offered():
     assert all(config == {} for config in runtimes.values())
 
 
-def test_the_engines_named_are_ones_yt_dlp_knows():
-    """A name yt-dlp does not recognise makes it raise rather than shrug."""
-    from yt_dlp.globals import supported_js_runtimes
-
-    offered = set(stage1_audio.js_runtime_options()["js_runtimes"])
-    assert offered <= set(supported_js_runtimes.value)
+# A companion test used to assert that every engine named here is one
+# `yt_dlp.globals.supported_js_runtimes` knows. It was removed deliberately:
+# that is an undocumented internal of the library, so the very yt-dlp upgrade
+# that fixes downloads could turn the release red as a side effect of shipping
+# it. yt-dlp already rejects an unknown engine name on its own.
 
 
 # -- retrying a refused download --------------------------------------------
@@ -175,9 +174,46 @@ def test_the_engines_named_are_ones_yt_dlp_knows():
         "HTTP Error 403: Forbidden",
     ],
 )
-def test_a_bare_403_is_worth_retrying(refusal):
-    """Google's media hosts refuse a large share of requests for no reason."""
-    assert stage1_audio._is_transient(RuntimeError(refusal))
+def test_a_bare_403_is_not_retried(refusal):
+    """It reads like noise and is not.
+
+    These were once retried eight times, on the belief that Google's media
+    hosts refuse a share of ordinary requests for no lasting reason. What was
+    really happening was YouTube withdrawing service from the player client
+    yt-dlp impersonates, and when that finished every attempt was refused. The
+    retries bought nothing and cost half a minute per song.
+    """
+    assert not stage1_audio._is_transient(RuntimeError(refusal))
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+        "HTTP Error 403: Forbidden",
+    ],
+)
+def test_a_bare_403_is_blamed_on_a_stale_yt_dlp(refusal):
+    """The one refusal the user cannot fix from inside the app."""
+    message = stage1_audio.explain_failure(RuntimeError(refusal))
+
+    assert message.startswith(stage1_audio.STALE_YTDLP)
+    assert "pip install -U yt-dlp yt-dlp-ejs" in message
+    # The sign-in advice is wrong here: no cookie makes a retired client work.
+    assert not message.startswith(stage1_audio.HEADLINE)
+
+
+@pytest.mark.parametrize(
+    "interruption",
+    [
+        "The read operation timed out",
+        "Connection reset by peer",
+        "HTTP Error 503: Service Unavailable",
+    ],
+)
+def test_a_faltering_connection_is_still_retried(interruption):
+    """What the retry loop is actually good for."""
+    assert stage1_audio._is_transient(RuntimeError(interruption))
 
 
 @pytest.mark.parametrize(

@@ -21,9 +21,21 @@ flicker - a config that changes chord every beat can score well and still be
 unplayable. ``--report`` prints the app's own noise metrics alongside, so that
 cost is visible before anything is adopted.
 
+``reference.json`` is ground truth and cannot be regenerated: the Chordify PDF
+exports it was parsed from were never committed and no longer exist, and the
+script that parsed them was removed with them. Recover that script from
+``git show 0769afd:backend/tools/chordify_reference.py`` if new exports are
+ever made. Treat the file here as source, never as output.
+
+Scoring re-fuses each reference song's stored predictions, so every song must
+be in the library with stage 3 already run against the same audio. Songs that
+are missing, or whose stored predictions the pipeline itself would refuse to
+reuse, are skipped with the reason; too few left and this refuses to search
+rather than fit a dozen parameters to one song.
+
 Usage::
 
-    python -m tools.chordify_reference <pdf-dir> -o reference.json
+    pip install optuna
     python -m tools.tune_chords reference.json --trials 500 --report
 """
 from __future__ import annotations
@@ -41,6 +53,18 @@ from vidichord.chords import cleanup as cleanup_mod            # noqa: E402
 from vidichord.chords.fusion import FusionConfig, decode       # noqa: E402
 from vidichord.chords.vocabulary import split_chord, triad_of  # noqa: E402
 from vidichord.config import Settings                          # noqa: E402
+from vidichord.project import AUDIO_FILENAME                   # noqa: E402
+
+# The pipeline's own staleness rules, borrowed rather than restated so the two
+# cannot drift apart. Importing this pulls in the engines, which are optional -
+# if they will not load, tuning is still possible, only unchecked.
+try:  # noqa: E402
+    from vidichord.pipeline.stage3_chords import (  # noqa: E402
+        ENGINE_VERSION,
+        audio_fingerprint,
+    )
+except Exception:  # pragma: no cover - reported at the point of use
+    ENGINE_VERSION, audio_fingerprint = None, None
 
 #: Reference/estimate tempo ratios: a fine sweep around 1.0 for ordinary drift,
 #: plus the metrical-level confusions (half/double/triple time) two independent
@@ -53,6 +77,15 @@ OFFSETS = np.arange(-12.0, 12.001, 0.10)
 GRID = 0.05
 #: Below this alignment agreement a song is considered unalignable.
 MIN_FIT = 0.35
+
+#: Fewest songs worth searching against.
+#:
+#: Below this the search is not tuning, it is memorising: a dozen parameters
+#: fitted to one or two songs reports a large, confident gain that generalises
+#: to nothing. An empty train set is worse - every trial scores ``nan``, the
+#: sampler happily runs all of them, and the failure arrives hundreds of trials
+#: later as an error about there being no best trial, which names none of this.
+MIN_TRAIN = 5
 
 _CODES: dict[str, int] = {}
 
@@ -132,6 +165,34 @@ class Song:
         return self.score(self.chords_for(fusion, cleanup_config), level)
 
 
+def why_stale(doc: dict, folder: Path) -> str:
+    """Why this song's stored predictions must not be tuned against, or "".
+
+    ``stage3_chords._refuse_stored`` will not reuse stored per-engine labels
+    once the engines or the audio have moved on. The tuner re-fuses those very
+    same numbers, and is the one place a stale set does the most harm: rather
+    than producing a wrong sheet for one song, it steers the weights every song
+    will be decoded with, and reports a confident gain for them.
+    """
+    if ENGINE_VERSION is None:
+        return ""
+
+    stored_version = doc.get("engine_version")
+    if stored_version != ENGINE_VERSION:
+        return f"engine_version {stored_version}, current is {ENGINE_VERSION}"
+
+    audio = folder / AUDIO_FILENAME
+    if not audio.is_file():
+        return "audio is gone, cannot confirm the predictions match it"
+
+    stored_print = doc.get("audio_fingerprint") or ""
+    if not stored_print:
+        return "predates fingerprinting, cannot confirm the audio matches"
+    if stored_print != audio_fingerprint(audio):
+        return "audio has changed since these predictions were stored"
+    return ""
+
+
 def load_songs(reference_path: Path, library: Path | None = None) -> list[Song]:
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
     library = library or Settings.load().library_dir
@@ -154,9 +215,21 @@ def load_songs(reference_path: Path, library: Path | None = None) -> list[Song]:
         if not chords or not chords.is_file() or duration <= 0:
             print(f"  skipped (not in library): {name[:60]}")
             continue
-        doc = json.loads(chords.read_text(encoding="utf-8"))
+        try:
+            doc = json.loads(chords.read_text(encoding="utf-8"))
+        except ValueError:
+            print(f"  skipped (unreadable 03_chords.json): {name[:60]}")
+            continue
+        stale = why_stale(doc, folder)
+        if stale:
+            print(f"  skipped ({stale}): {name[:60]}")
+            continue
         if doc.get("bars"):
             songs.append(Song(name, doc, entry["beats"], duration))
+
+    if ENGINE_VERSION is None:
+        print("\nNote: the engines would not import, so stored predictions "
+              "could not be checked for staleness.")
     return songs
 
 
@@ -230,6 +303,18 @@ def main() -> None:
     holdout = usable[::3]
     train = [s for s in usable if s not in holdout]
     print(f"\ntrain {len(train)} / holdout {len(holdout)}, {args.trials} trials")
+
+    if len(train) < MIN_TRAIN:
+        raise SystemExit(
+            f"\nOnly {len(train)} song(s) to train on; {MIN_TRAIN} is the "
+            "minimum.\n\n"
+            "The tuner scores by re-fusing each reference song's stored "
+            "per-engine predictions, so a song counts only when it is in the "
+            "library with stage 3 already run against the same audio. Import "
+            f'the videos named by "video_id" in {args.reference.name}, run '
+            "stages 1 and 3 on them, and try again. The lines above say which "
+            "songs were skipped and why."
+        )
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction="maximize",

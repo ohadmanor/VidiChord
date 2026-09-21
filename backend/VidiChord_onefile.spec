@@ -5,10 +5,9 @@ Produces one self-contained ``VidiChord.exe`` holding the Angular app, ffmpeg,
 the Essentia binaries and every Python dependency, so the machine it runs on
 needs no Python, no Node and no installs.
 
-Build it with ``release_windows.bat`` from the repository root, which builds
-the frontend, runs the tests and stamps the version first. The sibling
-``VidiChord.spec`` builds the same app as a folder instead, which starts far
-faster; this one trades that away for having a single file to hand over.
+Build it with ``devops/scripts/build_release.bat``, which builds the frontend,
+runs the tests and stamps the version first. This is the only build the
+project ships: one file to hand over, at the cost of unpacking on launch.
 
 Onefile means the bootloader unpacks the whole bundle - a good fraction of a
 gigabyte - into a temporary directory on *every* launch, before any Python
@@ -42,7 +41,7 @@ BUILD_DIR = BACKEND_DIR / "build"
 if not (FRONTEND_DIST / "index.html").is_file():
     raise SystemExit(
         f"The Angular app is not built: no index.html under {FRONTEND_DIST}.\n"
-        "Run release_windows.bat, or `npm run build` in frontend/."
+        "Run devops/scripts/build_release.bat, or `npm run build` in frontend/."
     )
 
 if not (ESSENTIA_DIR / "bin" / "streaming_extractor_music.exe").is_file():
@@ -126,7 +125,7 @@ if (FFMPEG_DIR / "ffmpeg.exe").is_file() and (FFMPEG_DIR / "ffprobe.exe").is_fil
 else:
     print("*** WARNING: backend/ffmpeg is missing ffmpeg.exe/ffprobe.exe.")
     print("*** The exe will download ffmpeg on every launch. Run")
-    print("*** release_windows.bat, which fetches it before building.")
+    print("*** devops/scripts/build_release.bat, which fetches it before building.")
 
 binaries = []
 hiddenimports = [
@@ -179,7 +178,7 @@ except ImportError as error:
         f"*** {error}\n"
         "*** yt-dlp-ejs supplies the JavaScript that signs YouTube download\n"
         "*** links; without it the exe cannot download anything from YouTube.\n"
-        "*** Run backend\\setup.bat, or: .venv\\Scripts\\pip install -r requirements.txt"
+        "*** Run devops\\scripts\\build_release.bat, or: .venv\\Scripts\\pip install -r requirements.txt"
     )
 
 if yt_dlp_ejs.version.split(".")[:2] != _yt_dlp_vendor.VERSION.split(".")[:2]:

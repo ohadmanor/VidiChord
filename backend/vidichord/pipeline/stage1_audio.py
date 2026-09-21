@@ -181,26 +181,42 @@ NO_JS_ENGINE = (
 
 #: How many times to ask YouTube for the media before believing the refusal.
 #:
-#: Google's media servers reject a large share of requests with a bare 403 for
-#: no lasting reason - measured at roughly half of all attempts on one video,
-#: with the very next attempt on a freshly extracted URL succeeding. yt-dlp
-#: does not retry these itself: a 403 is a client error, so it stops. Retrying
-#: the whole extraction is the only thing that clears it, and it is quick - a
-#: refused attempt costs under three seconds, so enough of them to make a run
-#: of bad luck unlikely still fails fast when the refusal is the real kind.
-_DOWNLOAD_ATTEMPTS = 8
+#: This used to be eight, on the understanding that a bare 403 from Google's
+#: media hosts was noise that a fresh extraction cleared. It was not. Those
+#: refusals were YouTube withdrawing service from the player client yt-dlp was
+#: impersonating, and once that finished the 403 became every request, so the
+#: eight attempts only stalled a download that could never succeed. Retries
+#: are kept for what they are actually good for - a connection that drops
+#: mid-transfer - and a few are plenty for that.
+_DOWNLOAD_ATTEMPTS = 3
 
 #: Seconds to wait between those attempts.
 _RETRY_PAUSE = 1.5
 
-#: Signatures of a refusal that a fresh attempt is likely to get past. A 403
-#: from the media host is transient; the sign-in and rate-limit refusals in
-#: ``_BLOCKED_SIGNS`` are not, and must not be retried into a long stall.
-_TRANSIENT_SIGNS = ("403", "forbidden", "unable to download video data")
+#: Signatures of a failure a fresh attempt may get past: the network faltering,
+#: or a server having a bad moment. A 403 is deliberately absent - see
+#: ``STALE_YTDLP`` - and so are the refusals in ``_BLOCKED_SIGNS``, which need
+#: the user to act rather than to wait.
+_TRANSIENT_SIGNS = (
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection aborted",
+    "connection broken",
+    "incomplete read",
+    "temporary failure",
+    "http error 500",
+    "http error 502",
+    "http error 503",
+    "http error 504",
+)
+
+#: A refusal of the media itself, as opposed to of the video's details.
+_MEDIA_REFUSAL_SIGNS = ("403", "forbidden")
 
 
 def _is_transient(error: Exception) -> bool:
-    """True if ``error`` looks like the 403 that simply retrying gets past."""
+    """True if ``error`` looks like something a fresh attempt may get past."""
     lowered = str(error).lower()
     if any(sign in lowered for sign in _BLOCKED_SIGNS):
         return False
@@ -211,6 +227,27 @@ def _is_transient(error: Exception) -> bool:
 #: unmistakable, because it is the one thing the user has to act on - the
 #: paragraphs after it are detail.
 HEADLINE = "You need to log in to YouTube."
+
+#: What a 403 on the media itself almost always means.
+#:
+#: yt-dlp fetches audio by impersonating one of YouTube's own player clients.
+#: YouTube retires those, and a retired one still answers for the video's
+#: details and still hands out streaming URLs - the refusal arrives only when
+#: the download starts. So the song looks fine right up to the moment it
+#: fails, no retry clears it, and no cookie helps. Only a yt-dlp new enough to
+#: ask as a client YouTube still serves.
+STALE_YTDLP = (
+    "YouTube would not send this song's audio.\n\n"
+    "This usually means VidiChord's copy of yt-dlp has been overtaken by a "
+    "change at YouTube's end: it asks for the audio as a player YouTube no "
+    "longer serves, and the refusal only arrives once the download starts - "
+    "which is why the video's details loaded normally.\n\n"
+    "Running from source, this fixes it:\n\n"
+    "    backend\\.venv\\Scripts\\pip install -U yt-dlp yt-dlp-ejs\n\n"
+    "and then restart VidiChord. In the packaged app a newer build is needed, "
+    "because the exe carries its own copy and cannot update it.\n\n"
+    "\"Add from file\" needs none of this, if you already have the audio."
+)
 
 #: Signatures of a refusal that more retries will not fix.
 _BLOCKED_SIGNS = (
@@ -260,6 +297,12 @@ def explain_failure(
         )
 
     if not any(sign in lowered for sign in _BLOCKED_SIGNS):
+        # A 403 on the media, with none of the sign-in or rate-limit wording
+        # around it, is the one refusal the user cannot fix from inside the
+        # app - and the rawest-looking of them all, so it is the one most
+        # worth translating.
+        if any(sign in lowered for sign in _MEDIA_REFUSAL_SIGNS):
+            return f"{STALE_YTDLP}\n\nOriginal error: {raw}"
         return raw
 
     if cookie_options(settings):
