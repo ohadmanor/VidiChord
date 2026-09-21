@@ -7,6 +7,7 @@ venv/
 
 # --- Node / Angular ---
 node_modules/
+package-lock.json
 .angular/
 dist/
 
@@ -27,5 +28,5 @@ backend/test_run.py
 
 # --- Local config (contains secrets) ---
 backend/config.json
-
+songs/
 *.pdf
