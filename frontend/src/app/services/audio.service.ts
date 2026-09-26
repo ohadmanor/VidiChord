@@ -103,9 +103,15 @@ export class AudioService implements OnDestroy {
     this.listeners.push({ name: event, handler });
   }
 
-  /** Point the player at a fully-formed audio URL. */
-  public loadTrack(url: string) {
-    if (!url || url === this.currentTrackPath()) return;
+  /**
+   * Point the player at a fully-formed audio URL.
+   *
+   * `force` loads it again even when it is the URL already set: one asked
+   * for before the audio existed got a 404, and asking again once it does is
+   * the only way the player recovers.
+   */
+  public loadTrack(url: string, force = false) {
+    if (!url || (!force && url === this.currentTrackPath())) return;
     this.teardownMixer();
     this.currentTrackPath.set(url);
     this.audio.src = url;

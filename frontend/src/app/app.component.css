@@ -415,53 +415,31 @@ textarea:focus {
   align-self: flex-start;
 }
 
-/* -------------------------------------------------------------- progress */
+/* ------------------------------------------------------------ run page */
 
-.progress-title {
-  font-weight: 600;
-  font-size: 1.05rem;
-  color: var(--primary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* A scrolling page with the card at its natural height. Top-aligned: the
+   running row is taller than the rest, and a centred card would bob up and
+   down as the run moves from step to step. */
+.run-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: clamp(16px, 6vh, 56px) 16px 24px;
 }
 
-.progress-title svg {
-  width: 18px;
-  height: 18px;
+.run-page > app-run-progress {
+  margin: 0 auto;
 }
 
-.animate-spin {
-  animation: spin 1.2s linear infinite;
+/* The Sync dialog: a lighter scrim than Settings, so the review it is
+   building from stays in view. */
+.run-backdrop {
+  background: rgba(25, 27, 35, 0.22);
+  backdrop-filter: blur(2px);
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.progress-message {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  min-height: 1.2em;
-}
-
-.progress-track {
-  width: 100%;
-  max-width: 460px;
-  height: 8px;
-  background: var(--inset-bg-strong);
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(to right, var(--primary), var(--secondary));
-  border-radius: 999px;
-  transition: width 0.3s ease-out;
+.run-backdrop > app-run-progress {
+  max-width: 520px;
 }
 
 /* ------------------------------------------------------------- workspace */

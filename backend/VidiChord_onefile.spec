@@ -224,8 +224,31 @@ try:
 except Exception:
     print("*** Building WITHOUT madmom: bar lines estimated, two chord engines.")
 
-# Separation is deliberately not bundled; see the excludes list below.
-print("*** Building WITHOUT stem separation (Demucs and torch are excluded).")
+# Stem separation is part of the app: Demucs, and the PyTorch it runs on. It is
+# imported lazily, inside the function that separates, which PyInstaller's
+# analysis still follows - but Demucs names its model classes in the model
+# files it loads, and reads the list of models from YAML files in its own
+# package, so both its submodules and its data have to be named here. PyTorch
+# comes through the hook pyinstaller-hooks-contrib ships for it, which also
+# keeps the Python source torch.jit needs at import time.
+#
+# A build without it must not pass for a complete one - the exe would say
+# "not installed" to everyone who opens the mixer - so a venv without Demucs
+# stops the build, as a venv without yt-dlp-ejs does above.
+try:
+    import demucs
+    import demucs.api  # noqa: F401  (4.1 is the first release on PyPI with it)
+    import torch
+except ImportError as error:
+    raise SystemExit(
+        f"*** {error}\n"
+        "*** Demucs and PyTorch separate every song into stems, and the exe is built\n"
+        "*** with them. Run devops\\scripts\\build_release.bat, or:\n"
+        "***   .venv\\Scripts\\pip install -r requirements.txt"
+    )
+hiddenimports += collect_submodules("demucs")
+datas += collect_data_files("demucs")
+print(f"*** Bundling Demucs {demucs.__version__} on torch {torch.__version__} (stem separation).")
 
 a = Analysis(
     [str(BACKEND_DIR / "main.py")],
@@ -239,20 +262,9 @@ a = Analysis(
     # Nothing here is imported by the app, and each one costs tens of
     # megabytes in a file users have to download.
     excludes=[
-        # Stem separation, and the PyTorch underneath it: together they weigh
-        # more than everything else in this bundle put together, on a file
-        # people already wait a good while to unpack. Separation is therefore
-        # a from-source feature, and the app says so when asked for it in a
-        # frozen build. These have to be named here rather than merely left
-        # uninstalled: PyInstaller reads imports inside function bodies too,
-        # so the lazy `import demucs.api` would drag all of it in from a
-        # developer's venv.
-        "demucs",
-        "torch",
+        # Demucs 4.1 reads and writes audio without it; only its training
+        # extra wants it, and a developer's venv may have it for other work.
         "torchaudio",
-        "sphn",
-        "lameenc",
-        "julius",
         "tkinter",
         "matplotlib",
         "pytest",

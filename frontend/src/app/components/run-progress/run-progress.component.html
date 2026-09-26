@@ -1,0 +1,80 @@
+<!-- No icon library here: every status mark is inline SVG or CSS. And no
+     chained ?. reads in one expression - see app.component.ts. -->
+<section class="rp" [attr.data-outcome]="outcome" aria-labelledby="rp-heading">
+  <header class="rp-head">
+    <h2 class="rp-heading" id="rp-heading">{{ headline }}</h2>
+    <p class="rp-song" dir="auto" *ngIf="songTitle">
+      <span class="rp-song-title">{{ songTitle }}</span><span *ngIf="songArtist"> &middot; {{ songArtist }}</span>
+    </p>
+    <p class="rp-meta">{{ metaLine }}</p>
+  </header>
+
+  <p class="rp-sr" aria-live="polite">{{ announcement }}</p>
+
+  <ol class="rp-steps">
+    <li
+      *ngFor="let step of steps; let i = index; trackBy: trackByKey"
+      class="rp-step"
+      [attr.data-state]="step.state"
+      [attr.aria-current]="step.state === 'running' ? 'step' : null"
+    >
+      <span class="rp-mark" aria-hidden="true" [ngSwitch]="step.state">
+        <svg *ngSwitchCase="'done'" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"></path></svg>
+        <svg *ngSwitchCase="'failed'" viewBox="0 0 16 16"><path d="M5 5l6 6M11 5l-6 6"></path></svg>
+        <svg *ngSwitchCase="'skipped'" viewBox="0 0 16 16"><path d="M4.5 8h7"></path></svg>
+        <svg *ngSwitchCase="'needs_input'" viewBox="0 0 16 16"><path d="M6 4.5v7M10 4.5v7"></path></svg>
+        <span *ngSwitchDefault>{{ i + 1 }}</span>
+      </span>
+
+      <div class="rp-body">
+        <div class="rp-line">
+          <span class="rp-sr">{{ stateWord(step) }}: </span>
+          <span class="rp-title">{{ step.title }}</span>
+          <span class="rp-side">{{ sideText(step, i) }}</span>
+        </div>
+
+        <!-- Only the running row opens up. -->
+        <ng-container *ngIf="step.state === 'running'">
+          <p class="rp-desc" *ngIf="step.description">{{ step.description }}</p>
+          <div class="rp-progress">
+            <div
+              class="rp-bar"
+              [class.indeterminate]="barValue(step) === null"
+              role="progressbar"
+              [attr.aria-label]="step.title"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              [attr.aria-valuenow]="barValue(step)"
+            >
+              <div class="rp-fill" [style.width.%]="barValue(step)"></div>
+            </div>
+            <span class="rp-pct" *ngIf="barValue(step) !== null">{{ barValue(step) }}%</span>
+          </div>
+          <div class="rp-foot">
+            <p class="rp-detail" [attr.title]="step.fullText || null">{{ step.detail || 'Starting…' }}</p>
+            <span class="rp-typical" *ngIf="step.typical">{{ step.typical }}</span>
+          </div>
+          <p class="rp-slow" *ngIf="isSlow(step)">{{ step.slowHint }}</p>
+        </ng-container>
+
+        <p
+          class="rp-detail"
+          *ngIf="(step.state === 'done' || step.state === 'skipped') && step.detail"
+          [attr.title]="step.fullText || null"
+        >{{ step.detail }}</p>
+        <p class="rp-box rp-box-failed" role="alert" *ngIf="step.state === 'failed'">{{ step.fullText || 'This step stopped.' }}</p>
+        <p class="rp-box rp-box-wait" *ngIf="step.state === 'needs_input' && step.detail">{{ step.detail }}</p>
+      </div>
+    </li>
+  </ol>
+
+  <p class="rp-next" *ngIf="nextText && (outcome === 'running' || outcome === 'done')">
+    <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5"></path></svg>
+    <span>{{ outcome === 'done' ? 'Opening now…' : nextText }}</span>
+  </p>
+
+  <footer class="rp-actions" *ngIf="outcome === 'failed'">
+    <button type="button" class="btn btn-secondary" (click)="dismiss.emit()">{{ dismissLabel }}</button>
+    <button type="button" class="btn btn-primary" (click)="retry.emit()">{{ retryLabel }}</button>
+  </footer>
+</section>

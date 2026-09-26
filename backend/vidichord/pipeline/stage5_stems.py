@@ -10,6 +10,10 @@ This stage never fails a run. Demucs is optional, it is heavy, and it is not
 in the release executable at all, so "there are no stems" has to be an
 ordinary outcome rather than an error: the reason is written onto
 ``05_stems.json`` and everything downstream carries on from the full mix.
+
+Its progress messages are matched, to be reworded for the app, in
+frontend/src/app/components/run-progress/run-progress.model.ts - keep the
+two in step.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ def _skip(context: StageContext, fingerprint: str, reason: str) -> None:
     offering no mixer.
     """
     context.project.write(StemsDoc(unavailable=reason, audio_fingerprint=fingerprint))
-    context.report(reason, 100.0)
+    context.skip(reason)
     print(f"Stems: {reason}", file=sys.stderr)
 
 

@@ -18,6 +18,10 @@ Two things keep this stage fast:
   engines are deterministic over unchanged audio - so a re-run whose only
   point is different fusion or cleanup settings re-fuses the stored
   predictions in under a second instead of re-running every engine.
+
+Its progress messages are matched, to be reworded for the app, in
+frontend/src/app/components/run-progress/run-progress.model.ts - keep the
+two in step.
 """
 
 from __future__ import annotations

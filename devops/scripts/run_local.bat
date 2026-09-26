@@ -3,7 +3,8 @@ REM ==========================================================================
 REM  VidiChord - set up, build, and run locally on Windows.
 REM
 REM  One command from a fresh checkout to a running app:
-REM    1  environment     backend\.venv, dependencies, and madmom if it builds
+REM    1  environment     backend\.venv, dependencies (Demucs and PyTorch
+REM                       among them), and madmom if it builds
 REM    2  frontend        the Angular app that the backend serves
 REM    3  run             starts the server and opens a browser
 REM
@@ -11,12 +12,10 @@ REM  Steps 1 and 2 skip themselves once their work is done, so an ordinary
 REM  launch goes straight to the app.
 REM
 REM  Usage:
-REM    devops\scripts\run_local.bat [--reinstall] [--rebuild] [--with-stems]
-REM                                 [--no-pause]
+REM    devops\scripts\run_local.bat [--reinstall] [--rebuild] [--no-pause]
 REM
 REM      --reinstall    discard backend\.venv and build it again
 REM      --rebuild      rebuild the Angular app even if it is already built
-REM      --with-stems   also install Demucs, for source separation (~400 MB)
 REM      --no-pause     do not wait for a keypress on failure (for CI)
 REM ==========================================================================
 setlocal EnableExtensions EnableDelayedExpansion
@@ -29,7 +28,6 @@ set "PY=%ROOT%\backend\.venv\Scripts\python.exe"
 set "FRONTEND_OUT=%ROOT%\frontend\dist\frontend\browser"
 set "REINSTALL=0"
 set "REBUILD=0"
-set "WITH_STEMS=0"
 set "NO_PAUSE=0"
 set "STEP=0"
 set "RC=0"
@@ -41,7 +39,9 @@ set "PYTHONIOENCODING=utf-8"
 :parse_args
 if "%~1"=="" goto args_done
 if /i "%~1"=="--reinstall" (set "REINSTALL=1" & shift & goto parse_args)
-if /i "%~1"=="--with-stems" (set "WITH_STEMS=1" & shift & goto parse_args)
+REM Stem separation used to be opt-in. It is part of the install now; the flag
+REM is still accepted, so an old habit or shortcut does not stop the launch.
+if /i "%~1"=="--with-stems" (shift & goto parse_args)
 if /i "%~1"=="--rebuild"   (set "REBUILD=1"   & shift & goto parse_args)
 if /i "%~1"=="--no-pause"  (set "NO_PAUSE=1"  & shift & goto parse_args)
 if /i "%~1"=="--help" goto usage
@@ -68,10 +68,28 @@ call :step "Angular frontend"
 
 REM The backend serves this build; without it every page answers 503.
 if "%REBUILD%"=="1" goto build_frontend
-if exist "%FRONTEND_OUT%\index.html" (
-    echo Already built. Pass --rebuild to build it again.
-    goto frontend_done
+if not exist "%FRONTEND_OUT%\index.html" goto build_frontend
+
+REM A build is only as good as the node_modules it came from. One installed
+REM before package.json last changed - a version since pinned, say - builds
+REM without a word of complaint and then fails in the browser: a library
+REM compiled for a newer Angular than this one leaves every icon throwing, the
+REM page frozen on its first frame. npm ls notices the mismatch; rebuild then.
+if not exist "%ROOT%\frontend\node_modules" goto frontend_built
+where /q npm
+if errorlevel 1 goto frontend_built
+cd /d "%ROOT%\frontend"
+call npm ls --depth=0 >nul 2>&1
+set "NPM_LS=!errorlevel!"
+cd /d "%ROOT%"
+if not "!NPM_LS!"=="0" (
+    echo frontend\node_modules does not match package.json - reinstalling and rebuilding.
+    goto build_frontend
 )
+
+:frontend_built
+echo Already built. Pass --rebuild to build it again.
+goto frontend_done
 
 :build_frontend
 where /q npm
@@ -130,7 +148,7 @@ echo Check the outputPath in frontend\angular.json.
 goto fail
 
 :usage
-echo Usage: devops\scripts\run_local.bat [--reinstall] [--rebuild] [--with-stems] [--no-pause]
+echo Usage: devops\scripts\run_local.bat [--reinstall] [--rebuild] [--no-pause]
 echo.
 echo   Sets up backend\.venv, builds the Angular app, and runs VidiChord.
 echo   Both of the first two steps are skipped when already done.
@@ -234,32 +252,20 @@ if errorlevel 1 (
 echo madmom is available: downbeat tracking and all three chord engines.
 :madmom_done
 
-REM Demucs is optional in the other direction from madmom: it installs without
-REM a compiler and without any coaxing, but it brings PyTorch - about 400 MB -
-REM so nobody gets it who did not ask. With it, every song is split into
-REM vocals, drums, bass and other; the player mixes them and the lyrics are
-REM timed against the isolated vocal.
-"%PY%" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('demucs') else 1)" 2>nul
+REM Demucs comes in with requirements.txt, and PyTorch with it - about 650 MB,
+REM the first time. With it, every song is split into vocals, drums, bass and
+REM other; the player mixes them and the lyrics are timed against the isolated
+REM vocal. Checked by importing it rather than by asking pip, because an
+REM install that went in but cannot load is the case worth reporting.
+"%PY%" -c "import demucs.api, torch" 2>nul
 if not errorlevel 1 (
     echo Stem separation is available.
     goto :eof
 )
-
-if "%WITH_STEMS%"=="0" (
-    echo Stem separation is not installed. Add it with --with-stems, or:
-    echo   backend\.venv\Scripts\pip install demucs
-    goto :eof
-)
-
-echo Installing Demucs and PyTorch. This downloads a few hundred megabytes.
-"%PY%" -m pip install --disable-pip-version-check demucs
-if errorlevel 1 (
-    echo.
-    echo Demucs could not be installed. VidiChord still runs: songs import as
-    echo they always did, with no stems and the lyrics timed against the mix.
-    goto :eof
-)
-echo Stem separation is available.
+echo.
+echo Demucs did not load, so songs will not be split into stems. VidiChord
+echo still runs, timing the lyrics against the full mix. To see why:
+echo   backend\.venv\Scripts\python -c "import demucs.api, torch"
 goto :eof
 
 :step

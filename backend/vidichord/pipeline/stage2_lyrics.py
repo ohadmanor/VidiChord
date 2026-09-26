@@ -18,6 +18,10 @@ Three things this stage guarantees for later stages:
 
 The raw transcript is cached beside the artifact, so choosing to paste lyrics
 after an automatic lookup fails does not re-run the slowest step.
+
+Its progress messages are matched, to be reworded for the app, in
+frontend/src/app/components/run-progress/run-progress.model.ts - keep the
+two in step.
 """
 
 from __future__ import annotations
@@ -197,7 +201,11 @@ def _transcribe(context: StageContext) -> tuple[str, list[dict], bool]:
         audio_path,
         language=context.param("language"),
         initial_prompt=prompt,
-        on_progress=lambda message: context.report(message, None),
+        # Transcription fills 5-38% of the stage: run() reports 5 just before
+        # it, and 40 once the lookup starts.
+        on_progress=lambda message, fraction=None: context.report(
+            message, None if fraction is None else 5.0 + 33.0 * fraction
+        ),
     )
     segments = transcript.as_dicts()
     _save_transcript(

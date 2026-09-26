@@ -6,6 +6,10 @@ so the app has no external install step.
 
 Metadata is probed before the download so the song's title and artist are known
 in time to name its project folder.
+
+Its progress messages are matched, to be reworded for the app, in
+frontend/src/app/components/run-progress/run-progress.model.ts - keep the
+two in step.
 """
 
 from __future__ import annotations
@@ -511,11 +515,13 @@ class _ProgressLogger:
         self._report = report
 
     def debug(self, message: str) -> None:
+        # The download fills 90% of the stage and the conversion the rest, so
+        # the bar keeps moving while ffmpeg works instead of waiting at full.
         if message.startswith("[download]"):
             found = self._PERCENT.search(message)
-            self._report(message.strip(), float(found.group(1)) if found else None)
+            self._report(message.strip(), float(found.group(1)) * 0.9 if found else None)
         elif message.startswith("[ExtractAudio]"):
-            self._report("Converting to WAV...", None)
+            self._report("Converting to WAV...", 92.0)
 
     def info(self, message: str) -> None:
         pass

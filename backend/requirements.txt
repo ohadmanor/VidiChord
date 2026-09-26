@@ -42,23 +42,18 @@ soundfile>=0.12
 numpy>=1.26
 scipy>=1.11
 
-# --- stem separation (optional) ---
-# Deliberately not listed here either, for a different reason than madmom's: it
-# installs perfectly well (`pip install demucs` - every dependency has a
-# Windows wheel and none needs a compiler), but it brings PyTorch, about 400 MB
-# installed, which is more than the rest of this application weighs. That is
-# too much to impose on everyone who only wants a chord sheet, and far too much
-# to put inside a single-file executable that unpacks itself on every launch.
+# --- stem separation ---
+# Demucs splits every song into vocals, drums, bass and other: the player turns
+# those into faders, and stage 2 transcribes the isolated vocal, which is where
+# Whisper's word timings are at their best. 4.1 is the first release on PyPI
+# with demucs.api, which the app drives.
 #
-# With it, every song is split into vocals, drums, bass and other: the player
-# turns those into faders, and stage 2 transcribes the isolated vocal, which is
-# where Whisper's word timings are at their best. Without it, songs import
-# exactly as they did before - stage 5 records why it separated nothing and
-# every later stage works from the full mix.
-#
-#   backend\.venv\Scripts\pip install demucs
-#
-# or run devops\scripts\run_local.bat --with-stems once.
+# It is the heaviest thing here: it brings PyTorch, about 650 MB installed on
+# Windows (the CPU build - the one PyPI serves there; it runs on any machine,
+# and a CUDA build installed in its place is used when present). Every
+# dependency has a Windows wheel and none needs a compiler. The model itself,
+# about 80 MB, downloads on the first separation, the way Whisper's do.
+demucs>=4.1
 
 # --- development ---
 # Not needed to run the app, but needed to release it: the release build runs

@@ -107,21 +107,17 @@ milliseconds; feeding the engines different audio would quietly invalidate
 both. That is an experiment worth running one day, with the reference sheets
 to score it. It is not a thing to assume.
 
-**Demucs is optional**, in the same way madmom is, and for a blunter reason:
-it brings PyTorch, about 400 MB installed, which is more than the rest of
-VidiChord weighs. So it is not in `requirements.txt` and it is never bundled
-into the released executable. Install it when you want it:
+**Demucs is part of the install.** `requirements.txt` brings it, and PyTorch
+with it — the heaviest thing the app installs, about 650 MB on Windows the
+first time — so `run_local.bat` sets it up with everything else, and the
+release executable bundles it. Everything installs from wheels; unlike
+madmom, no compiler is involved. (`--with-stems`, which used to opt in, is
+still accepted and now does nothing.)
 
-```bat
-backend\.venv\Scripts\pip install demucs
-```
-
-or pass `--with-stems` to `run_local.bat` once. Everything installs from
-wheels — unlike madmom, no compiler is involved.
-
-Without it, nothing breaks: stage 5 records why it separated nothing, the
-player keeps playing the mix with no mixer to offer, and the lyrics are timed
-against the full recording exactly as they were before. With it, expect a
+It is never required to run, though. Switch it off in Settings, or have an
+install where it will not load, and nothing breaks: stage 5 records why it
+separated nothing, the player keeps playing the mix with no mixer to offer,
+and the lyrics are timed against the full recording. With it, expect a
 couple of extra minutes per song — measured at **158 s for a 3:39 track**, or
 0.72× its length, on a Core Ultra 7 265U with no GPU — and about 13 MB of Opus
 stems beside the 37 MB `audio.wav`. A CUDA GPU, if there is one, is used
@@ -342,12 +338,14 @@ gigabyte — into a temporary folder on *every* launch, before any of the app
 runs. Expect to wait. The console window stays open for that reason: it makes
 the wait legible, and it carries the pipeline's progress output afterwards.
 
-Two things the exe does not carry. Stem separation is one, left out on
-purpose: Demucs and PyTorch together outweigh everything else in the bundle,
-on a file that already unpacks most of a gigabyte on every launch. The app
-says so plainly when the mixer is asked for, and every other feature works.
+The exe carries stem separation too: Demucs and PyTorch are bundled, and the
+build stops rather than leave them out. They are what makes it the size it
+is — measured at 461 MB with them against 323 MB without, and about 20 s
+from double-click to a running app against about 11 s — because every launch
+unpacks the whole bundle first. The separation model itself (about 80 MB)
+downloads on the first song that is separated, as the speech models do.
 
-The other is a JavaScript engine, because it is a separate
+One thing the exe does not carry is a JavaScript engine, because it is a separate
 program rather than a Python dependency. YouTube signs its download links and
 unscrambling them means running the player's own code, so a machine with no
 Node.js (or Deno, Bun or QuickJS) can open local audio files but not download

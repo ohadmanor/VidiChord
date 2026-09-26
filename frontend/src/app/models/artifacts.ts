@@ -180,6 +180,22 @@ export interface SheetDoc {
 
 // --- jobs and library ------------------------------------------------------
 
+/** A stage's state within one run: the manifest's states, plus skipped. */
+export type JobStepState = StageState | 'skipped';
+
+/** One stage a run works through, as the run sees it. */
+export interface JobStep {
+  stage: number;
+  label: string;
+  state: JobStepState;
+  /** Progress within this stage, 0-100; null until it reports one. Never goes backwards. */
+  percent: number | null;
+  /** The latest message while running; afterwards its result, skip reason, error or question. */
+  message: string;
+  /** Seconds so far while running, or in total once finished; null while pending. */
+  elapsed: number | null;
+}
+
 export interface Job {
   job_id: string;
   song_id: string;
@@ -193,6 +209,14 @@ export interface Job {
   options: string[];
   updated_at: string;
   version: number;
+  /**
+   * The stages this run works through, in running order, and each one's own
+   * record. Optional so that the app still renders - one row, from `stage` -
+   * against a backend from before they existed.
+   */
+  stages?: number[];
+  stage_percent?: number | null;
+  steps?: JobStep[];
 }
 
 export interface SongSummary {

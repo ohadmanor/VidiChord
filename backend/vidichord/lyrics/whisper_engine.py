@@ -5,6 +5,10 @@ The old implementation transcribed a Hebrew song twice: once end-to-end with
 revealed the language. Transcription is the slowest thing the pipeline does, so
 here a small model identifies the language first and only the right large model
 is ever run over the full audio.
+
+Its progress messages are matched, to be reworded for the app, in
+frontend/src/app/components/run-progress/run-progress.model.ts - keep the
+two in step.
 """
 
 from __future__ import annotations
@@ -77,7 +81,9 @@ _BATCH_SIZE = int_env("VIDICHORD_WHISPER_BATCH", 1)
 #: rare mix whose vocals Silero misses even at the gentle threshold below.
 _USE_VAD = int_env("VIDICHORD_WHISPER_VAD", 1, minimum=0) > 0
 
-ProgressFn = Callable[[str], None]
+#: ``(message, fraction=None)``: the fraction is how far through the recording
+#: decoding has got, from 0 to 1, when that is known.
+ProgressFn = Callable[..., None]
 
 
 @dataclass
@@ -139,8 +145,16 @@ def model_for_language(language: str | None) -> str:
     return HEBREW_MODEL if language == "he" else DEFAULT_MODEL
 
 
-def _collect_segments(raw_segments, on_progress: ProgressFn | None) -> list[Segment]:
-    """Drain the decoder's lazy generator - this is where the minutes go."""
+def _collect_segments(
+    raw_segments, on_progress: ProgressFn | None, duration: float = 0.0
+) -> list[Segment]:
+    """Drain the decoder's lazy generator - this is where the minutes go.
+
+    Progress is reported every few phrases with how far through the recording
+    decoding has got, as a fraction of ``duration`` when that is known: the
+    segments' end times are on the original timeline even with the voice
+    filter on, so the fraction is a true one.
+    """
     segments: list[Segment] = []
     for raw in raw_segments:
         words = [
@@ -151,9 +165,10 @@ def _collect_segments(raw_segments, on_progress: ProgressFn | None) -> list[Segm
         segments.append(
             Segment(start=raw.start, end=raw.end, text=raw.text.strip(), words=words)
         )
-        if on_progress and len(segments) % 10 == 0:
+        if on_progress and len(segments) % 3 == 0:
             minutes, seconds = divmod(int(raw.end), 60)
-            on_progress(f"Transcribing audio... ({minutes}:{seconds:02d} done)")
+            fraction = min(1.0, raw.end / duration) if duration > 0 else None
+            on_progress(f"Transcribing audio... ({minutes}:{seconds:02d} done)", fraction)
     return segments
 
 
@@ -289,7 +304,8 @@ class WhisperEngine:
         if on_progress:
             on_progress("Transcribing audio...")
         raw_segments, info = self._start_transcription(model, audio_path, options)
-        segments = _collect_segments(raw_segments, on_progress)
+        duration = getattr(info, "duration", 0.0) or 0.0
+        segments = _collect_segments(raw_segments, on_progress, duration)
 
         # Judged before the fallback below runs: whatever that pass decodes
         # out of a track the VAD called silent is suspect by construction.
@@ -304,7 +320,8 @@ class WhisperEngine:
             options["vad_filter"] = False
             options.pop("vad_parameters", None)
             raw_segments, info = self._start_transcription(model, audio_path, options)
-            segments = _collect_segments(raw_segments, on_progress)
+            duration = getattr(info, "duration", 0.0) or 0.0
+            segments = _collect_segments(raw_segments, on_progress, duration)
 
         return Transcript(
             language=language or info.language,

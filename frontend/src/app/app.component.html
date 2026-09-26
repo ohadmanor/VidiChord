@@ -204,36 +204,31 @@
       </div>
     </div>
 
-    <!-- ======================= Progress ======================= -->
-    <div class="glass-panel centred" *ngIf="isRunning && !showChoiceModal">
-      <div class="progress-title">
-        <svg lucideRefreshCw class="animate-spin"></svg>
-        Stage {{ job?.stage }} &mdash; {{ job?.stage_label }}
-      </div>
-      <div class="progress-message">{{ job?.message }}</div>
-      <div class="progress-track">
-        <div class="progress-fill" [style.width.%]="progressPercent"></div>
-      </div>
-      <div class="progress-percent">{{ progressPercent.toFixed(0) }}%</div>
-    </div>
-
-    <!-- Adding a song: no job yet, the server is reading the video's details -->
-    <div class="glass-panel centred" *ngIf="starting && !isRunning">
-      <div class="progress-title">
-        <svg lucideRefreshCw class="animate-spin"></svg>
-        Reading video details&hellip;
-      </div>
-      <div class="progress-message">Just after start-up this can take a little longer, while yt-dlp updates.</div>
+    <!-- ======================= Run progress ======================= -->
+    <!-- From the click that starts a run until the next screen shows, or the
+         run is closed after failing - so `run`, not isRunning, decides it. -->
+    <div class="run-page" *ngIf="run && !showChoiceModal && !showLibrary">
+      <app-run-progress
+        [steps]="run.steps"
+        [heading]="run.heading"
+        doneHeading="Done — opening the review"
+        [songTitle]="run.songTitle"
+        [songArtist]="run.songArtist"
+        [outcome]="run.outcome"
+        [nextText]="runNextText"
+        (retry)="retryRun()"
+        (dismiss)="dismissRun()"
+      ></app-run-progress>
     </div>
 
     <!-- ======================= Empty state ======================= -->
-    <div class="glass-panel centred" *ngIf="!songId && !isRunning && !starting && !showChoiceModal && !showLibrary">
+    <div class="glass-panel centred" *ngIf="!songId && !run && !showChoiceModal && !showLibrary">
       <h2>Load a song</h2>
       <p class="muted">Paste a YouTube link in the toolbar above, or open the library.</p>
     </div>
 
     <!-- ======================= Workspace ======================= -->
-    <div class="workspace" *ngIf="songId && !isRunning && !showChoiceModal && !showLibrary">
+    <div class="workspace" *ngIf="songId && !run && !showChoiceModal && !showLibrary">
       <!-- Metadata. The sheet does not exist until the first sync, so the
            lyrics carry the title and artist until then. -->
       <div class="metadata-bar" *ngIf="sheet || lyrics">
@@ -354,6 +349,24 @@
       </div>
     </div>
   </main>
+
+  <!-- ======================= Sync ======================= -->
+  <!-- Over the review, which stays visible behind it - and cannot be typed
+       into while the corrections are being saved. -->
+  <div class="modal-backdrop run-backdrop" *ngIf="syncRun">
+    <app-run-progress
+      [steps]="syncRun.steps"
+      heading="Building your song sheet"
+      doneHeading="Sheet ready — opening it"
+      [songTitle]="displayTitle"
+      [songArtist]="displayArtist"
+      [outcome]="syncRun.outcome"
+      nextText="The song sheet opens as soon as it is laid out. You can come back and edit at any time."
+      dismissLabel="Back to editing"
+      (retry)="sync()"
+      (dismiss)="closeSync()"
+    ></app-run-progress>
+  </div>
 
   <!-- ======================= Settings ======================= -->
   <div class="modal-backdrop" *ngIf="showSettingsModal">

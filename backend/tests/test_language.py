@@ -126,3 +126,35 @@ def test_a_missing_or_corrupt_transcript_is_not_an_error(tmp_path):
 
     (project.root / stage2_lyrics.TRANSCRIPT_FILENAME).write_text("{not json", encoding="utf-8")
     assert stage2_lyrics._load_transcript(context) is None
+
+
+def test_transcription_reports_how_far_through_the_recording_it_is():
+    """So the lyrics step's bar moves, rather than sitting still for minutes."""
+    from types import SimpleNamespace
+
+    raw = [SimpleNamespace(start=10 * i, end=10 * i + 9, text="x", words=[]) for i in range(6)]
+    seen = []
+
+    def progress(message, fraction=None):
+        seen.append((message, fraction))
+
+    whisper_engine._collect_segments(raw, progress, 180.0)
+
+    assert seen == [
+        ("Transcribing audio... (0:29 done)", 29 / 180),
+        ("Transcribing audio... (0:59 done)", 59 / 180),
+    ]
+
+
+def test_without_a_known_length_there_is_no_fraction_to_report():
+    from types import SimpleNamespace
+
+    raw = [SimpleNamespace(start=0, end=5, text="x", words=[]) for _ in range(3)]
+    seen = []
+
+    def progress(message, fraction=None):
+        seen.append(fraction)
+
+    whisper_engine._collect_segments(raw, progress)
+
+    assert seen == [None]

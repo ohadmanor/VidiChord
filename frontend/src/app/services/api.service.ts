@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, NgZone, inject } from '@angular/core';
 import {
   AppConfig,
   ChordsDoc,
@@ -14,6 +14,19 @@ import {
   StemsDoc,
 } from '../models/artifacts';
 
+/** States after which a job reports nothing more. */
+const TERMINAL_JOB_STATES: Job['state'][] = ['done', 'failed', 'needs_input'];
+
+/** How often to ask after a job once its event stream has dropped. */
+const POLL_MS = 1500;
+
+/** Failed polls in a row before the run is given up on - about 7.5 s. */
+const LOST_AFTER_MISSES = 5;
+
+const LOST_RUN =
+  'Lost contact with this run - the app may have been restarted. Open the song ' +
+  'from the library to see how far it got, and run it again from there.';
+
 /**
  * Client for the VidiChord API.
  *
@@ -25,6 +38,7 @@ import {
 export class ApiService {
   /** Same-origin when served by the backend; absolute for `ng serve`. */
   readonly baseUrl = this.resolveBaseUrl();
+  private readonly zone = inject(NgZone);
 
   private resolveBaseUrl(): string {
     const devServerPorts = ['4200', '4300'];
@@ -95,7 +109,7 @@ export class ApiService {
       cleanup?: CleanupConfig;
       review?: boolean;
     } = {}
-  ): Promise<{ song_id: string; job: Job }> {
+  ): Promise<{ song_id: string; title?: string; artist?: string; duration?: number; job: Job }> {
     return this.request('/api/songs', {
       method: 'POST',
       body: JSON.stringify({ url, ...options }),
@@ -226,41 +240,85 @@ export class ApiService {
   /**
    * Follow a job's progress over server-sent events.
    *
-   * Returns a function that closes the stream. `onDone` fires once the job
-   * reaches a terminal state, whether it succeeded or not.
+   * Returns a function that stops following it. `onDone` fires once, and only
+   * with a job in a terminal state - whether it succeeded or not.
+   *
+   * A stream that drops mid-run hands over to polling. It used to hand the
+   * job's last state straight to `onDone`, still running, and the app then
+   * announced a finished run in the middle of one. Polling that fails several
+   * times in a row - the backend restarted, say - ends the watch with a
+   * failed job that says so, rather than leaving the screen waiting forever.
    */
   watchJob(
     jobId: string,
     onProgress: (job: Job) => void,
     onDone?: (job: Job) => void
   ): () => void {
+    let stopped = false;
+    let finished = false;
+    let misses = 0;
+    let last: Job | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const source = new EventSource(
       `${this.baseUrl}/api/jobs/${encodeURIComponent(jobId)}/events`
     );
-    let last: Job | null = null;
 
-    source.onmessage = (event) => {
-      const job = JSON.parse(event.data) as Job;
-      last = job;
-      onProgress(job);
-      if (job.state === 'done' || job.state === 'failed' || job.state === 'needs_input') {
-        source.close();
-        onDone?.(job);
-      }
+    // Inside Angular's zone, explicitly. zone.js patches EventSource only in
+    // its legacy bundle, which this app does not load, so the stream's
+    // messages arrive outside the zone and nothing re-renders for them. That
+    // went unnoticed while something else happened to trigger a render - a
+    // ticking timer, the audio element loading - and showed as a screen that
+    // stayed on "Done" and never moved on to the review.
+    const deliver = (job: Job) =>
+      this.zone.run(() => {
+        if (stopped || finished) return;
+        // A slower answer overtaken by a newer one.
+        if (last && job.version < last.version) return;
+        last = job;
+        onProgress(job);
+        if (TERMINAL_JOB_STATES.includes(job.state)) {
+          finished = true;
+          source.close();
+          clearTimeout(timer);
+          onDone?.(job);
+        }
+      });
+
+    const poll = () => {
+      if (stopped || finished) return;
+      this.getJob(jobId)
+        .then((job) => {
+          misses = 0;
+          deliver(job);
+        })
+        .catch(() => {
+          misses += 1;
+          if (misses < LOST_AFTER_MISSES) return;
+          const base: Job = last ?? {
+            job_id: jobId, song_id: '', state: 'running', stage: 0, stage_label: '',
+            message: '', percent: 0, error: '', options: [], updated_at: '', version: 0,
+          };
+          deliver({ ...base, state: 'failed', error: LOST_RUN, version: base.version + 1 });
+        })
+        .finally(() => {
+          if (!stopped && !finished) timer = setTimeout(poll, POLL_MS);
+        });
     };
 
-    // A dropped connection after the job finished is expected, not an error.
+    source.onmessage = (event) => deliver(JSON.parse(event.data) as Job);
+    // The server closes the stream after the final event, which deliver() has
+    // already handled. Any other error - a dropped connection, a restarted
+    // backend - hands over to polling.
     source.onerror = () => {
       source.close();
-      if (last && last.state !== 'done' && last.state !== 'failed') {
-        this.getJob(jobId).then((job) => {
-          onProgress(job);
-          onDone?.(job);
-        }).catch(() => undefined);
-      }
+      if (!finished) poll();
     };
 
-    return () => source.close();
+    return () => {
+      stopped = true;
+      source.close();
+      clearTimeout(timer);
+    };
   }
 
   // --- audio, export, settings ---------------------------------------------

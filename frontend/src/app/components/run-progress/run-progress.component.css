@@ -1,0 +1,284 @@
+/* The run-progress card. Colours come from the tokens in styles.css; the
+   app has no red or amber tokens (.alert-error hard-codes its red), so those
+   are local custom properties. .btn and its variants are global. */
+
+/* width:100% matters: a shrink-to-fit host would change width with every message. */
+:host {
+  display: block;
+  width: 100%;
+  max-width: 600px;
+  min-width: 0;
+  --rp-danger: #b91c1c;
+  --rp-danger-bg: rgba(239, 68, 68, 0.08);
+  --rp-danger-border: rgba(239, 68, 68, 0.25);
+  --rp-wait: #b45309;
+  --rp-wait-bg: rgba(245, 158, 11, 0.12);
+}
+:host-context([data-theme='dark']),
+:host-context([data-theme='oled']) {
+  --rp-danger: #f87171;
+  --rp-wait: #fbbf24;
+}
+
+.rp {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  padding: 24px 28px 22px;
+  font-family: var(--font-sans);
+  color: var(--text-main);
+  text-align: left;
+}
+
+/* ---------------------------------------------------------------- header */
+.rp-heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.rp[data-outcome='done'] .rp-heading { color: var(--primary); }
+.rp[data-outcome='failed'] .rp-heading { color: var(--rp-danger); }
+.rp[data-outcome='needs_input'] .rp-heading { color: var(--rp-wait); }
+
+.rp-song {
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rp-song-title { color: var(--text-main); font-weight: 500; }
+.rp-meta {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----------------------------------------------------------------- steps */
+.rp-steps { list-style: none; margin: 20px 0 0; padding: 0; }
+
+.rp-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  column-gap: 14px;
+  padding-bottom: 16px;
+}
+.rp-step:last-child { padding-bottom: 0; }
+
+/* Rail from this mark to the next; primary once the run has moved past it. */
+.rp-step::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 28px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-color);
+}
+.rp-step:last-child::before { display: none; }
+.rp-step[data-state='done']::before,
+.rp-step[data-state='skipped']::before { background: var(--primary); }
+
+/* ------------------------------------------------------------------ mark */
+.rp-mark {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font: 600 0.72rem/1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+.rp-mark svg,
+.rp-next svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Running: the number stays still; a CSS arc spins around it. */
+[data-state='running'] > .rp-mark { border-color: var(--primary-glow); color: var(--primary); }
+[data-state='running'] > .rp-mark::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--primary);
+  border-right-color: var(--primary);
+  animation: rp-spin 0.9s linear infinite;
+}
+/* The card colour as the glyph keeps contrast in every theme (white on the light theme's blue). */
+[data-state='done'] > .rp-mark { background: var(--primary); border-color: var(--primary); color: var(--bg-card); }
+[data-state='skipped'] > .rp-mark { border-style: dashed; }
+[data-state='failed'] > .rp-mark { background: var(--rp-danger); border-color: var(--rp-danger); color: var(--bg-card); }
+[data-state='needs_input'] > .rp-mark { background: var(--rp-wait); border-color: var(--rp-wait); color: var(--bg-card); }
+
+/* ------------------------------------------------------------------ text */
+.rp-body { min-width: 0; padding-top: 2px; }
+.rp-line { display: flex; align-items: baseline; gap: 12px; min-height: 20px; }
+.rp-title { flex: 1; min-width: 0; font-size: 0.95rem; font-weight: 500; }
+.rp-side {
+  flex: none;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+[data-state='pending'] .rp-title,
+[data-state='skipped'] .rp-title { color: var(--text-muted); }
+[data-state='pending'] .rp-side { color: var(--text-faint); }
+[data-state='running'] .rp-title { font-weight: 600; }
+[data-state='running'] .rp-side { color: var(--primary); font-weight: 600; }
+[data-state='failed'] .rp-title,
+[data-state='failed'] .rp-side { color: var(--rp-danger); }
+[data-state='needs_input'] .rp-title,
+[data-state='needs_input'] .rp-side { color: var(--rp-wait); }
+
+.rp-desc { margin: 3px 0 0; font-size: 0.83rem; line-height: 1.45; color: var(--text-muted); }
+
+/* ------------------------------------------------------------------- bar */
+.rp-progress { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.rp-bar {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--inset-bg-strong);
+  overflow: hidden;
+}
+.rp-fill {
+  position: relative;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(to right, var(--primary), var(--secondary));
+  transition: width 0.4s ease-out;
+  overflow: hidden;
+}
+/* A slow sheen, so a checkpoint percent that sits still for a minute still reads as alive. */
+.rp-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  animation: rp-sheen 1.8s ease-in-out infinite;
+}
+/* Unknown percent: the [style.width.%] binding is null, so this 35% segment slides instead. */
+.rp-bar.indeterminate .rp-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 35%;
+  transition: none;
+  animation: rp-slide 1.3s ease-in-out infinite;
+}
+.rp-pct {
+  flex: none;
+  min-width: 3.5ch;
+  text-align: right;
+  font: 600 0.8rem var(--font-mono);
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-foot { display: flex; align-items: baseline; gap: 12px; margin-top: 6px; }
+.rp-foot .rp-detail { flex: 1; margin: 0; }
+.rp-typical { flex: none; font-size: 0.75rem; color: var(--text-faint); white-space: nowrap; }
+
+.rp-detail {
+  margin: 3px 0 0;
+  min-width: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: plaintext; /* Hebrew song names inside English sentences */
+}
+[data-state='running'] .rp-detail { color: var(--text-main); }
+/* The running row's live line is the one the user reads: it wraps rather
+   than being cut off beside the "Usually…" note. */
+.rp-foot .rp-detail { white-space: normal; }
+
+.rp-box {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-line; /* the yt-dlp explanations are several short paragraphs */
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.rp-box-failed { background: var(--rp-danger-bg); border: 1px solid var(--rp-danger-border); color: var(--rp-danger); }
+.rp-box-wait { background: var(--rp-wait-bg); color: var(--rp-wait); }
+.rp-slow { margin: 6px 0 0; font-size: 0.78rem; line-height: 1.4; color: var(--rp-wait); }
+
+/* ------------------------------------------------------- next / actions */
+.rp-next {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0 0;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.rp-next svg { flex: none; color: var(--primary); }
+.rp[data-outcome='done'] .rp-next {
+  border-top-style: solid;
+  border-top-color: var(--primary-glow);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.rp-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+.rp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes rp-spin { to { transform: rotate(360deg); } }
+@keyframes rp-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@keyframes rp-sheen { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-state='running'] > .rp-mark::after { animation: none; border-color: var(--primary); }
+  .rp-fill::after { display: none; }
+  .rp-fill { transition: none; }
+  .rp-bar.indeterminate .rp-fill { animation: none; width: 100%; opacity: 0.35; }
+}
+
+@media (max-width: 520px) {
+  .rp { padding: 18px 16px; }
+  .rp-typical { display: none; }
+}

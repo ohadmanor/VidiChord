@@ -3,8 +3,9 @@ REM ==========================================================================
 REM  VidiChord - set up, build, and package the Windows executable.
 REM
 REM  Produces release\VidiChord-<version>-win64.exe: one self-contained file
-REM  holding the Angular app, ffmpeg, the Essentia binaries, the madmom models
-REM  and every Python dependency. The machine it runs on needs no Python and no
+REM  holding the Angular app, ffmpeg, the Essentia binaries, the madmom models,
+REM  Demucs with PyTorch for stem separation, and every Python dependency. The
+REM  machine it runs on needs no Python and no
 REM  installs - but it does need a JavaScript engine to download from YouTube,
 REM  which is a separate program and cannot be bundled. See the closing banner.
 REM
@@ -115,6 +116,17 @@ echo madmom     : MISSING - the release will estimate bar lines and fuse two
 echo              chord engines instead of three. Re-run on Python 3.12 with a
 echo              C compiler to get it, or accept the reduced build.
 :preflight_done
+
+REM Demucs is not optional for a release: the spec stops the build without
+REM it, rather than ship an exe that says "not installed" to every user.
+"%PY%" -c "import demucs.api, torch" 2>nul
+if errorlevel 1 goto no_demucs
+echo Demucs     : present, stem separation will be bundled
+goto demucs_checked
+:no_demucs
+echo Demucs     : MISSING - the executable step will stop. It comes with
+echo              requirements.txt; --reinstall sets the venv up again.
+:demucs_checked
 
 
 REM --- 3. version -----------------------------------------------------------

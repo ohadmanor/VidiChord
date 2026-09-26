@@ -7,11 +7,19 @@ status dict that previously limited the app to one song at a time.
 
 Progress is versioned so a reader can block until something actually changes
 rather than re-sending an unchanged snapshot every second.
+
+Besides the run as a whole, a job keeps one record per stage it will run -
+its state, its own percent, its last message and how long it took - so the
+app can draw the whole road: what is done, what is running, what comes next.
+A stage that finishes in milliseconds (separation, when it is switched off)
+would otherwise never be seen at all, because the event stream only sends the
+latest snapshot.
 """
 
 from __future__ import annotations
 
 import threading
+import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -22,6 +30,34 @@ from .pipeline import STAGE_LABELS, NeedsUserInput, StageContext, run_stage
 
 #: Terminal job states - no further progress will be reported.
 _FINISHED = {"done", "failed", "needs_input"}
+
+
+def _new_step(stage: int) -> dict:
+    """The record of one scheduled stage that has not started.
+
+    ``state`` is pending, running, done, skipped, failed or needs_input.
+    ``started`` and ``ended`` are on the monotonic clock, so the elapsed times
+    derived from them survive the wall clock being changed mid-run.
+    """
+    return {
+        "stage": stage, "state": "pending", "percent": None, "message": "",
+        "started": None, "ended": None,
+    }
+
+
+def _step_snapshot(record: dict, now: float) -> dict:
+    started, ended = record["started"], record["ended"]
+    return {
+        "stage": record["stage"],
+        "label": STAGE_LABELS.get(record["stage"], ""),
+        "state": record["state"],
+        "percent": None if record["percent"] is None else round(record["percent"], 1),
+        "message": record["message"],
+        #: Seconds so far, or in total once finished; None until it starts. In
+        #: seconds rather than as timestamps, so the app parses no clocks.
+        "elapsed": None if started is None
+        else round((ended if ended is not None else now) - started, 1),
+    }
 
 
 @dataclass
@@ -41,8 +77,28 @@ class Job:
     created_at: str = field(default_factory=utcnow)
     updated_at: str = field(default_factory=utcnow)
     version: int = 0
+    #: One record per scheduled stage, in running order (see ``_new_step``).
+    #: A change replaces the tuple and the record it touches rather than
+    #: editing them, because the event stream snapshots jobs outside the lock.
+    steps: tuple[dict, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.steps:
+            self.steps = tuple(_new_step(number) for number in self.stages)
+
+    def running_step(self) -> dict | None:
+        return next((step for step in self.steps if step["state"] == "running"), None)
+
+    def with_step(self, stage: int, **fields) -> tuple[dict, ...]:
+        """``steps`` with one stage's record replaced by an updated copy."""
+        return tuple(
+            {**step, **fields} if step["stage"] == stage else step for step in self.steps
+        )
 
     def snapshot(self) -> dict:
+        now = time.monotonic()
+        steps = self.steps  # read the reference once: it may be replaced meanwhile
+        running = next((step for step in steps if step["state"] == "running"), None)
         return {
             "job_id": self.job_id,
             "song_id": self.song_id,
@@ -55,6 +111,10 @@ class Job:
             "options": list(self.options),
             "updated_at": self.updated_at,
             "version": self.version,
+            "stages": list(self.stages),
+            "stage_percent": None if running is None or running["percent"] is None
+            else round(running["percent"], 1),
+            "steps": [_step_snapshot(step, now) for step in steps],
         }
 
     @property
@@ -148,36 +208,75 @@ class JobManager:
         thread.start()
         return job
 
+    def _set_step(self, job: Job, which: int, step: dict, **changes) -> None:
+        """Stage ``which``'s record, and any job fields with it, as one version."""
+        # The condition wraps an RLock, so _update may take it again inside.
+        with self._condition:
+            self._update(job, steps=job.with_step(which, **step), **changes)
+
     def _run(self, job: Job, build_context) -> None:
         def report(message: str, percent: float | None) -> None:
-            changes: dict = {"message": message}
-            if percent is not None:
-                changes["percent"] = self._overall_percent(job, percent)
-            self._update(job, **changes)
+            # Under the lock: stage 3 reports from its engine threads too.
+            with self._condition:
+                text = message.strip()
+                changes: dict = {"message": text}
+                step = job.running_step()
+                if step is not None:
+                    fields: dict = {"message": text}
+                    if percent is not None:
+                        # Never backwards within a stage: a retried download,
+                        # or Whisper's second pass without the voice filter,
+                        # restarts its own count - and a shrinking bar reads
+                        # as lost work.
+                        percent = max(step["percent"] or 0.0, min(100.0, float(percent)))
+                        fields["percent"] = percent
+                    changes["steps"] = job.with_step(step["stage"], **fields)
+                if percent is not None:
+                    changes["percent"] = self._overall_percent(job, percent)
+                self._update(job, **changes)
 
         try:
             context = build_context(report)
         except Exception as error:
             traceback.print_exc()
+            # Every step stays pending; the app pins the error on the first.
             self._update(job, state="failed", error=str(error))
             return
 
         self._update(job, state="running")
         for number in job.stages:
-            self._update(
-                job, stage=number, message=f"Stage {number}: {STAGE_LABELS[number]}"
+            context.skipped = ""
+            self._set_step(
+                job, number, {"state": "running", "started": time.monotonic()},
+                stage=number, message=f"Stage {number}: {STAGE_LABELS[number]}",
             )
             try:
                 run_stage(number, context)
             except NeedsUserInput as pause:
-                self._update(
-                    job, state="needs_input", message=str(pause), options=pause.options
+                ended = {"state": "needs_input", "message": str(pause), "ended": time.monotonic()}
+                self._set_step(
+                    job, number, ended,
+                    state="needs_input", message=str(pause), options=pause.options,
                 )
                 return
             except Exception as error:
                 traceback.print_exc()
-                self._update(job, state="failed", error=str(error))
+                self._set_step(
+                    job, number,
+                    {"state": "failed", "message": str(error), "ended": time.monotonic()},
+                    state="failed", error=str(error),
+                )
                 return
+            # A finished step keeps its last message: that is its result line.
+            skipped = getattr(context, "skipped", "")
+            ended = {
+                "state": "skipped" if skipped else "done",
+                "percent": 100.0,
+                "ended": time.monotonic(),
+            }
+            if skipped:
+                ended["message"] = skipped
+            self._set_step(job, number, ended)
 
         self._update(job, state="done", percent=100.0, message="Complete.")
 

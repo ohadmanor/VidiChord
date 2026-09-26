@@ -1,9 +1,9 @@
 """Source separation, and what the rest of the pipeline does with it.
 
 Two rules are what these tests exist to hold. Separation never fails a run:
-Demucs is optional, heavy, and absent from the release executable, so "there
-are no stems" has to be an ordinary outcome that leaves the transcription and
-the chords to carry on over the full mix. And a stem is only used while it
+Demucs is heavy, can be switched off, and can fail to load, so "there are no
+stems" has to be an ordinary outcome that leaves the transcription and the
+chords to carry on over the full mix. And a stem is only used while it
 still describes the audio on disk - re-adding a local file must not leave
 stage 2 transcribing the vocal of a different recording.
 
@@ -12,6 +12,7 @@ is also what keeps the suite honest on a machine where separation does work.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -119,9 +120,26 @@ class TestAvailability:
         assert "switched off in settings" in stems_mod.unavailable_reason(settings)
 
     def test_a_missing_demucs_says_how_to_install_it(self, monkeypatch):
+        """It is in requirements.txt now, so a venv without it is an incomplete one."""
         monkeypatch.delenv("VIDICHORD_DEMUCS", raising=False)
         monkeypatch.setattr(demucs_engine, "demucs_installed", lambda: False)
-        assert "pip install demucs" in stems_mod.unavailable_reason()
+        reason = stems_mod.unavailable_reason()
+        assert "requirements.txt" in reason
+        assert "run_local.bat" in reason
+
+    def test_an_exe_without_demucs_points_at_the_release_build(self, monkeypatch):
+        """The release build refuses to build without it, so this exe was made another way."""
+        monkeypatch.delenv("VIDICHORD_DEMUCS", raising=False)
+        monkeypatch.setattr(demucs_engine, "demucs_installed", lambda: False)
+        monkeypatch.setattr(demucs_engine.sys, "frozen", True, raising=False)
+        assert "build_release.bat" in stems_mod.unavailable_reason()
+
+    def test_the_release_build_refuses_to_leave_demucs_out(self):
+        spec = (Path(__file__).resolve().parent.parent / "VidiChord_onefile.spec").read_text(
+            encoding="utf-8"
+        )
+        assert '"demucs",' not in spec and '"torch",' not in spec  # not excluded
+        assert "import demucs.api" in spec and "SystemExit" in spec
 
 
 # ---------------------------------------------------------------------------

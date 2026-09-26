@@ -4,11 +4,12 @@ Splits a mix into vocals, drums, bass and everything else. Two things want
 that: the player, which turns the four parts into faders, and stage 2, which
 transcribes a clean vocal far better than it transcribes a whole band.
 
-Demucs is optional, exactly as madmom is. It brings PyTorch with it - about
-400 MB installed, more than the rest of this application weighs - so it is not
-in ``requirements.txt`` and is never bundled into the release executable.
-Without it the app behaves as it always did: stage 5 records why it separated
-nothing, and every later stage works from the full mix.
+Demucs is part of the app: ``requirements.txt`` installs it, PyTorch with it
+(about 650 MB on Windows, more than the rest of the application weighs), and
+the release executable bundles both. It is still never required to *run*: an
+install where it will not load - or a user who switches separation off - gets
+the app as it always was, stage 5 recording why it separated nothing and every
+later stage working from the full mix.
 
 Everything here imports demucs lazily. Importing torch costs seconds and a few
 hundred megabytes of address space, and a song that is not being separated
@@ -110,14 +111,17 @@ def unavailable_reason(settings=None) -> str:
         return "Stem separation is switched off in settings."
     if not demucs_installed():
         if getattr(sys, "frozen", False):
+            # The release build refuses to build without it, so this is an exe
+            # built some other way.
             return (
-                "Stem separation needs Demucs and PyTorch, which this "
-                "single-file build does not carry - together they are larger "
-                "than the rest of the app. Run VidiChord from source to use it."
+                "Stem separation needs Demucs and PyTorch, and this build of "
+                "VidiChord was made without them. A build from "
+                "devops\\scripts\\build_release.bat includes them."
             )
         return (
-            "Demucs is not installed. Add it to the app's environment with: "
-            "backend\\.venv\\Scripts\\pip install demucs"
+            "Demucs is not installed. It is part of requirements.txt, so "
+            "devops\\scripts\\run_local.bat installs it, or: "
+            "backend\\.venv\\Scripts\\pip install -r backend\\requirements.txt"
         )
     return ""
 

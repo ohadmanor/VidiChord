@@ -8,13 +8,26 @@ import {
   LucideMusic,
   LucidePause,
   LucidePlay,
-  LucideRefreshCw,
   LucideSettings,
   LucideSliders,
   LucideVolume2,
   LucideX,
 } from '@lucide/angular';
 import { ChordGridComponent } from './components/chord-grid/chord-grid.component';
+import { RunProgressComponent } from './components/run-progress/run-progress.component';
+import {
+  ADD_SONG_STAGES,
+  LyricsMode,
+  ProgressStep,
+  RunOutcome,
+  blankStep,
+  formatClock,
+  settleStep,
+  sheetSummary,
+  startStep,
+  stepsFromJob,
+  syncSteps,
+} from './components/run-progress/run-progress.model';
 import { SheetViewComponent } from './components/sheet-view/sheet-view.component';
 import { StemMixerComponent } from './components/stem-mixer/stem-mixer.component';
 import { WaveformComponent } from './components/waveform/waveform.component';
@@ -88,6 +101,48 @@ const DEFAULT_CHOICE_REASON =
   'No lyrics were found for this song. Use the transcript, paste the lyrics, ' +
   'or mark the song instrumental.';
 
+/** How long a finished or paused run stays on screen before the next one. */
+const RUN_DONE_BEAT_MS = 900;
+/** Sync never just flashes: it shows for at least this long... */
+const SYNC_MIN_MS = 1000;
+/** ...and holds its finished state for at least this long. */
+const SYNC_DONE_BEAT_MS = 600;
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const NEXT_TEXT =
+  'Next, the lyrics and chords open side by side for you to check. Sync then builds the song sheet.';
+
+type LyricsChoice = 'ai' | 'manual' | 'instrumental';
+type RunKind = 'add' | 'rerun' | 'stems' | 'choice' | 'resume';
+
+const RERUN_HEADINGS: Record<number, string> = {
+  1: 'Adding your song',
+  5: 'Separating the voice from the band',
+  2: 'Redoing the lyrics',
+  3: 'Redoing the chords',
+};
+const CHOICE_HEADINGS: Record<LyricsChoice, string> = {
+  manual: 'Lining up your lyrics',
+  ai: 'Using the transcript',
+  instrumental: 'Making a chords-only sheet',
+};
+
+/** A run on screen: the steps it works through, and how it ended. */
+interface RunView {
+  kind: RunKind;
+  heading: string;
+  songTitle: string;
+  songArtist: string;
+  /** The client-side "Find the video" row of an add, before any job exists. */
+  lookup: ProgressStep | null;
+  /** The lookup, if there is one, then the job's own rows. */
+  steps: ProgressStep[];
+  outcome: RunOutcome;
+  lyricsMode: LyricsMode;
+  /** The lyrics answer a choice run was started with, for Try again. */
+  choice: LyricsChoice | null;
+}
+
 /**
  * Application shell.
  *
@@ -105,6 +160,7 @@ const DEFAULT_CHOICE_REASON =
     SheetViewComponent,
     ChordGridComponent,
     StemMixerComponent,
+    RunProgressComponent,
     LucideMusic,
     LucideLayers,
     LucideFileText,
@@ -112,7 +168,6 @@ const DEFAULT_CHOICE_REASON =
     LucidePause,
     LucideVolume2,
     LucideAlertCircle,
-    LucideRefreshCw,
     LucideSettings,
     LucideSliders,
     LucideX,
@@ -146,6 +201,22 @@ export class AppComponent implements OnInit, OnDestroy {
    * it may also wait for yt-dlp to finish updating, so it can take a while.
    */
   starting = false;
+  /**
+   * The run on screen, step by step. Set from the click that starts it until
+   * the next screen shows, or until it is closed after failing - so it
+   * outlives the job, and the screen is decided by it rather than by
+   * isRunning. Buttons are still disabled by isRunning and `starting`.
+   */
+  run: RunView | null = null;
+  /** Sync's own steps, shown over the review while it saves and lays out. */
+  syncRun: { steps: ProgressStep[]; outcome: RunOutcome } | null = null;
+  /** Bumped whenever a run view begins or ends, so a stale pause does nothing. */
+  private runToken = 0;
+  /** The song's names before any lyrics exist, from adding or opening it. */
+  private knownTitle = '';
+  private knownArtist = '';
+  /** The song whose audio the player has been given, once it existed. */
+  private audioLoadedFor = '';
 
   // --- library -------------------------------------------------------------
   library: SongSummary[] = [];
@@ -317,8 +388,47 @@ export class AppComponent implements OnInit, OnDestroy {
     return this.lyrics?.language === 'he' ? 'rtl' : 'ltr';
   }
 
-  get progressPercent(): number {
-    return this.job?.percent ?? 0;
+  // --- the run on screen ---------------------------------------------------
+
+  private beginRun(
+    kind: RunKind,
+    heading: string,
+    options: { lookup?: ProgressStep; plan?: number[]; lyricsMode?: LyricsMode; choice?: LyricsChoice } = {}
+  ): number {
+    this.runToken += 1;
+    const lookup = options.lookup ?? null;
+    const plan = (options.plan ?? []).map((n) => blankStep(`stage-${n}`, options.lyricsMode));
+    this.run = {
+      kind,
+      heading,
+      songTitle: this.sheet?.title || this.lyrics?.title || this.knownTitle,
+      songArtist: this.sheet?.artist || this.lyrics?.artist || this.knownArtist,
+      lookup,
+      steps: lookup ? [lookup, ...plan] : plan,
+      outcome: 'running',
+      lyricsMode: options.lyricsMode ?? 'auto',
+      choice: options.choice ?? null,
+    };
+    return this.runToken;
+  }
+
+  private endRun(): void {
+    this.runToken += 1;
+    this.run = null;
+  }
+
+  private showJob(job: Job): void {
+    const run = this.run;
+    if (!run) return;
+    const jobSteps = stepsFromJob(job, run.steps, run.lyricsMode);
+    this.run = { ...run, steps: run.lookup ? [run.lookup, ...jobSteps] : jobSteps };
+  }
+
+  get runNextText(): string {
+    const run = this.run;
+    const audio = run ? run.steps.find((step) => step.key === 'stage-1') : undefined;
+    const playable = !!this.songId && (!audio || audio.state === 'done');
+    return playable ? `${NEXT_TEXT} Meanwhile, you can play the song from the player above.` : NEXT_TEXT;
   }
 
   // --- starting and following a run ---------------------------------------
@@ -332,7 +442,13 @@ export class AppComponent implements OnInit, OnDestroy {
     this.resetSong();
     this.persistTuning();
 
+    // The whole road shows from the click: reading the video's details is
+    // step one, and the stages the job will run are laid out behind it.
     this.starting = true;
+    const token = this.beginRun('add', 'Adding your song', {
+      lookup: startStep(blankStep('lookup'), 'Asking YouTube about this video…'),
+      plan: ADD_SONG_STAGES,
+    });
     try {
       const created = await this.api.createFromYoutube(url, {
         language: this.selectedLanguage === 'auto' ? null : this.selectedLanguage,
@@ -340,47 +456,93 @@ export class AppComponent implements OnInit, OnDestroy {
         cleanup: this.cleanup,
         review: true,
       });
+      if (token !== this.runToken || !this.run || !this.run.lookup) return;
       this.songId = created.song_id;
+      this.knownTitle = created.title || '';
+      this.knownArtist = created.artist || '';
+      const found = created.title ? `Found “${created.title}”` : 'Found it';
+      const lookup = settleStep(
+        this.run.lookup,
+        'done',
+        created.duration ? `${found}, ${formatClock(created.duration * 1000)} long` : found
+      );
+      this.run = {
+        ...this.run,
+        lookup,
+        songTitle: this.knownTitle,
+        songArtist: this.knownArtist,
+        steps: [lookup, ...this.run.steps.slice(1)],
+      };
       this.watch(created.job);
     } catch (err) {
-      this.error = this.describe(err);
+      if (token !== this.runToken || !this.run || !this.run.lookup) return;
+      // Shown in full on the step itself, so not in the alert as well.
+      const lookup = settleStep(this.run.lookup, 'failed', '', this.describe(err));
+      this.run = { ...this.run, lookup, steps: [lookup, ...this.run.steps.slice(1)], outcome: 'failed' };
     } finally {
       this.starting = false;
     }
   }
 
   private watch(job: Job): void {
+    if (!this.run) this.beginRun('resume', 'Still working on this song');
     this.job = job;
+    this.showJob(job);
     this.stopWatching?.();
     this.stopWatching = this.api.watchJob(
       job.job_id,
       (update) => {
+        if (update.song_id && update.song_id !== this.songId) return;
         this.job = update;
-        // Load the audio as soon as stage 1 has produced it.
-        if (update.stage >= 2 && !this.audioService.currentTrackPath()) {
-          this.audioService.loadTrack(this.api.audioUrl(this.songId));
+        this.showJob(update);
+        // Load the audio as soon as stage 1 has produced it - forcibly, since
+        // the player may have been pointed at it before it existed and got a
+        // 404 it would otherwise never retry.
+        if (update.stage >= 2 && this.audioLoadedFor !== this.songId) {
+          this.audioLoadedFor = this.songId;
+          this.audioService.loadTrack(this.api.audioUrl(this.songId), true);
         }
       },
-      (final) => this.onJobFinished(final)
+      (final) => void this.onJobFinished(final)
     );
   }
 
   private async onJobFinished(job: Job): Promise<void> {
+    // A run for a song no longer open - deleted, say - has nothing to show.
+    if (job.song_id && job.song_id !== this.songId) return;
+    if (!this.run) this.beginRun('resume', 'Working on this song');
+    this.showJob(job);
+    const run = this.run!;
+
+    if (job.state === 'failed') {
+      // The card stays, the failed step showing why, until Try again or
+      // Close. Whatever was pasted is kept: the run failing is exactly when
+      // the user needs another go at it, and retyping the lyrics is the one
+      // part of that they cannot get back. The reload below is what drops
+      // it, and that only happens once the run has worked.
+      this.run = { ...run, outcome: 'failed' };
+      return;
+    }
+
+    const token = this.runToken;
     if (job.state === 'needs_input') {
+      this.run = { ...run, outcome: 'needs_input' };
+      await delay(RUN_DONE_BEAT_MS);
+      if (token !== this.runToken) return;
+      this.endRun();
       this.lyricsNeedsInput = true;
       this.choiceReason = job.message || DEFAULT_CHOICE_REASON;
       this.showChoiceModal = true;
       return;
     }
-    if (job.state === 'failed') {
-      this.error = job.error || 'The run failed.';
-      // Whatever was pasted is kept: the run failing is exactly when the user
-      // needs another go at it, and retyping the lyrics is the one part of
-      // that they cannot get back. The reload below is what drops it, and
-      // that only happens once the run has worked.
-      return;
-    }
-    await this.loadSong(this.songId);
+
+    // A moment on the finished card - which also covers loading the song -
+    // then on to the review by itself.
+    this.run = { ...run, outcome: 'done' };
+    await Promise.all([this.loadSong(this.songId, { keepRun: true }), delay(RUN_DONE_BEAT_MS)]);
+    // Another song opened, or another run started, meanwhile.
+    if (token !== this.runToken) return;
+    this.endRun();
     // The run deliberately stopped before the sheet, so show the editor even
     // when an earlier sheet is still on disk from a previous sync.
     this.view = 'review';
@@ -388,8 +550,33 @@ export class AppComponent implements OnInit, OnDestroy {
     await this.refreshLibrary();
   }
 
+  /** Try a failed run again, the way it was first asked for. */
+  retryRun(): void {
+    const run = this.run;
+    const failed = run ? run.steps.find((step) => step.state === 'failed') : undefined;
+    if (!run || !failed) return;
+    // The URL is still in the box.
+    if (failed.key === 'lookup') {
+      void this.startFromYoutube();
+      return;
+    }
+    // The pasted text is kept until a run succeeds.
+    if (run.kind === 'choice' && run.choice) {
+      void this.submitChoice(run.choice);
+      return;
+    }
+    // From the stage that failed, reusing everything before it.
+    void this.rerun(Number(failed.key.slice('stage-'.length)));
+  }
+
+  dismissRun(): void {
+    this.endRun();
+  }
+
   async submitChoice(choice: 'ai' | 'manual' | 'instrumental'): Promise<void> {
-    if (!this.songId || this.choiceSubmitting) return;
+    // Not while another run is going: its own stage 2 would be the one that
+    // ran, and this answer would be silently lost.
+    if (!this.songId || this.choiceSubmitting || this.isRunning) return;
     if (choice === 'manual' && !this.manualLyrics.trim()) return;
     // Nothing about the run that follows is idempotent - it rewrites the
     // lyrics and re-fuses every chord - and the server starts one per request
@@ -407,6 +594,7 @@ export class AppComponent implements OnInit, OnDestroy {
       // text on a rejection, which is the moment it is least replaceable - and
       // the text is kept until the run succeeds, so a failure can be retried.
       this.showChoiceModal = false;
+      this.beginRun('choice', CHOICE_HEADINGS[choice], { lyricsMode: choice, choice });
       this.watch(job);
     } catch (err) {
       this.error = this.describe(err);
@@ -426,6 +614,10 @@ export class AppComponent implements OnInit, OnDestroy {
         language: this.selectedLanguage === 'auto' ? null : this.selectedLanguage,
         review: true,
       });
+      // The lyrics panel, if open, would hide the run's card; the run asks
+      // again itself if it pauses for lyrics, and the pasted text is kept.
+      this.showChoiceModal = false;
+      this.beginRun(stage === 5 ? 'stems' : 'rerun', RERUN_HEADINGS[stage] ?? 'Working on this song');
       this.watch(job);
     } catch (err) {
       this.error = this.describe(err);
@@ -435,6 +627,12 @@ export class AppComponent implements OnInit, OnDestroy {
   // --- loading -------------------------------------------------------------
 
   private resetSong(): void {
+    // Stop following the old song's run: it carries on on the server - a
+    // delete does not cancel it - and its events would otherwise keep
+    // re-disabling Add and end in a card for a song that is gone.
+    this.stopWatching?.();
+    this.stopWatching = null;
+    this.audioLoadedFor = '';
     this.songId = '';
     this.lyrics = null;
     this.chords = null;
@@ -445,6 +643,10 @@ export class AppComponent implements OnInit, OnDestroy {
     this.job = null;
     this.view = 'review';
     this.dirty = false;
+    this.endRun();
+    this.syncRun = null;
+    this.knownTitle = '';
+    this.knownArtist = '';
     this.forgetChoice();
   }
 
@@ -462,7 +664,21 @@ export class AppComponent implements OnInit, OnDestroy {
     this.manualLyrics = '';
   }
 
-  async loadSong(songId: string): Promise<void> {
+  /**
+   * Open a song. `keepRun` leaves the finished run's card on screen while the
+   * song loads behind it, so the review appears whole rather than filling in.
+   */
+  async loadSong(songId: string, options: { keepRun?: boolean } = {}): Promise<void> {
+    // The song already open, still being worked on - picked from the library
+    // to get back to it. Its run is on screen already, with what only it
+    // knows: which lyrics answer started it, and the pasted text Try again
+    // would need. Starting over would drop both.
+    if (songId === this.songId && this.isRunning && !options.keepRun) {
+      this.showLibrary = false;
+      return;
+    }
+    if (!options.keepRun) this.endRun();
+    this.syncRun = null;
     this.busy = true;
     this.error = '';
     // Another song's run must not be left on screen: `job` drives isRunning,
@@ -486,6 +702,8 @@ export class AppComponent implements OnInit, OnDestroy {
       this.lyrics = lyrics;
       this.chords = chords;
       this.sheet = sheet;
+      this.knownTitle = detail ? detail.title : '';
+      this.knownArtist = detail ? detail.artist : '';
       this.lyricsText = lyrics ? this.renderLyricsText(lyrics) : '';
       this.dirty = false;
       // A song that has already been synced opens on its sheet; one that has
@@ -497,7 +715,12 @@ export class AppComponent implements OnInit, OnDestroy {
       const stale = this.sheetIsBehind(detail);
       this.view = sheet && !stale ? 'sheet' : 'review';
       this.dirty = stale && !!sheet;
-      this.audioService.loadTrack(this.api.audioUrl(songId));
+      // Only once there is audio to load: a song still downloading would get
+      // a 404 here, and the run's progress loads it when stage 1 is done.
+      if (!detail || detail.stages?.['audio'] === 'done') {
+        this.audioService.loadTrack(this.api.audioUrl(songId), this.audioLoadedFor !== songId);
+        this.audioLoadedFor = songId;
+      }
       // The mixer replaces the mix once its four parts are decoded; until
       // then, and on a song without stems, the element carries on playing.
       void this.loadStems(songId);
@@ -512,6 +735,7 @@ export class AppComponent implements OnInit, OnDestroy {
       // what keeps the buttons that would start a second one disabled, and it
       // is the only way back to its progress and its result.
       if (detail?.job && (detail.job.state === 'queued' || detail.job.state === 'running')) {
+        this.beginRun('resume', 'Still working on this song');
         this.watch(detail.job);
         return;
       }
@@ -642,22 +866,68 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     this.syncing = true;
     this.error = '';
+    // Three steps, each ticked off only when its own request returns, so the
+    // dialog says truthfully where it is. It also keeps the review from being
+    // typed into while the corrections are saved: a word typed then used to
+    // miss the sheet and still be marked clean.
+    const started = Date.now();
+    let steps = syncSteps();
+    const show = (outcome: RunOutcome = 'running') => (this.syncRun = { steps, outcome });
+    const doing: Record<string, string> = {
+      'save-lyrics': 'Saving the lyrics…',
+      'save-chords': 'Saving the chords…',
+      'stage-4': 'Placing the chords over the words…',
+    };
+    const begin = (key: string) => {
+      steps = steps.map((step) => (step.key === key ? startStep(step, doing[key]) : step));
+      show();
+    };
+    const finish = (key: string, detail: string) => {
+      steps = steps.map((step) => (step.key === key ? settleStep(step, 'done', detail) : step));
+      show();
+    };
+    let current = 'save-lyrics';
+    show();
     try {
       const lyrics = this.parseLyricsText(this.lyricsText, this.lyrics);
+      begin(current);
       await this.api.putLyrics(this.songId, lyrics, false);
+      finish(current, `${lyrics.lines.length} lines saved`);
+
+      current = 'save-chords';
+      begin(current);
       await this.api.putChords(this.songId, this.chords, false);
+      finish(current, `${this.chords.bars.length} bars saved`);
       this.lyrics = lyrics;
 
-      this.sheet = await this.api.syncSheet(this.songId);
+      current = 'stage-4';
+      begin(current);
+      const sheet = await this.api.syncSheet(this.songId);
+      finish(current, sheetSummary(sheet));
+      this.sheet = sheet;
       this.dirty = false;
+
+      show('done');
+      await delay(Math.max(SYNC_DONE_BEAT_MS, SYNC_MIN_MS - (Date.now() - started)));
+      if (!this.syncRun) return; // closed, or another song opened, meanwhile
+      this.syncRun = null;
       this.view = 'sheet';
       this.flash('Song sheet generated.');
       await this.refreshLibrary();
     } catch (err) {
-      this.error = this.describe(err);
+      // Shown on the step that failed, so not in the alert as well.
+      steps = steps.map((step) =>
+        step.key === current ? settleStep(step, 'failed', '', this.describe(err)) : step
+      );
+      show('failed');
     } finally {
       this.syncing = false;
     }
+  }
+
+  /** Close a failed Sync; the review and every edit in it are untouched. */
+  closeSync(): void {
+    this.syncRun = null;
   }
 
   /** Go back to the editor without touching what is already on disk. */
@@ -829,7 +1099,7 @@ export class AppComponent implements OnInit, OnDestroy {
    * reads what it produced.
    */
   async separateStems(): Promise<void> {
-    if (!this.songId || this.isSeparating) return;
+    if (!this.songId || this.isSeparating || this.isRunning) return;
     this.error = '';
     try {
       const job = await this.api.rerunStage(this.songId, 5, {
@@ -837,6 +1107,9 @@ export class AppComponent implements OnInit, OnDestroy {
         cleanup: this.cleanup,
         review: true,
       });
+      this.showMixer = false;
+      this.showChoiceModal = false; // as in rerun()
+      this.beginRun('stems', RERUN_HEADINGS[5]);
       this.watch(job);
     } catch (err) {
       this.error = this.describe(err);

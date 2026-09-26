@@ -51,10 +51,22 @@ class StageContext:
     _report: ProgressFn | None = None
     #: Stage-specific parameters, e.g. fusion weights or a language override.
     params: dict = field(default_factory=dict)
+    #: Why the running stage chose to do nothing, set by :meth:`skip`. The job
+    #: manager clears it before each stage.
+    skipped: str = ""
 
     def report(self, message: str, percent: float | None = None) -> None:
         if self._report is not None:
             self._report(message, percent)
+
+    def skip(self, reason: str) -> None:
+        """Finish the running stage having deliberately done nothing, and say why.
+
+        The app then shows the stage as skipped, with the reason, rather than
+        as done - separation that is switched off did not separate anything.
+        """
+        self.skipped = reason
+        self.report(reason, 100.0)
 
     def param(self, name: str, default=None):
         return self.params.get(name, default)

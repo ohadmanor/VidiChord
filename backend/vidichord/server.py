@@ -168,13 +168,27 @@ def create_app() -> FastAPI:
         except Exception as error:
             raise HTTPException(status_code=400, detail=str(error))
 
+        # The names and length, so the app can say what it found before any
+        # stage has run: the lyrics that carry them later do not exist yet.
+        # Read before the job starts, not after - its first act is to replace
+        # manifest.json, and on Windows a replace fails with "access denied"
+        # while anyone has the file open to read it.
+        manifest = project.read_manifest()
+        source = project.read_optional(SourceDoc)
+
         params = pipeline_params(request)
         job = jobs().submit(
             project.song_id,
             stages_from(1, request.review),
             make_context_builder(project, params),
         )
-        return {"song_id": project.song_id, "job": job.snapshot()}
+        return {
+            "song_id": project.song_id,
+            "title": manifest.title,
+            "artist": manifest.artist,
+            "duration": source.duration if source else 0.0,
+            "job": job.snapshot(),
+        }
 
     @app.get("/api/songs/{song_id}")
     def get_song(song_id: str) -> dict:

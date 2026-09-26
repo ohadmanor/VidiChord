@@ -9,6 +9,10 @@ This used to live in the Angular component, where it could not be tested
 alongside the three stages it depends on. The chord-placement algorithm is
 carried over unchanged - it was the good part - and now sits in
 :mod:`vidichord.sheet.layout` with tests around it.
+
+Its progress messages are matched, to be reworded for the app, in
+frontend/src/app/components/run-progress/run-progress.model.ts - keep the
+two in step.
 """
 
 from __future__ import annotations
