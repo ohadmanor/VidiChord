@@ -176,8 +176,10 @@ straight to the app. Pass `--reinstall` to rebuild the environment or
 It handles madmom's three quirks: its `setup.py` imports Cython
 without declaring it (so the build runs with `--no-build-isolation`), the PyPI
 sdist ships C files including `longintrepr.h` which Python 3.12 removed (so it
-installs from git and lets Cython regenerate them), and it needs NumPy 1.x at
-build time. It also needs a C compiler:
+installs from git and lets Cython regenerate them), and it must be compiled
+against the NumPy 2.x the rest of the environment uses (so it builds with
+`--no-deps`, and pip cannot swap NumPy underneath it). It also needs a C
+compiler:
 
 ```bat
 winget install Microsoft.VisualStudio.2022.BuildTools ^

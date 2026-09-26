@@ -1,8 +1,8 @@
 # VidiChord backend dependencies.
 #
 # Python 3.11 or 3.12 is recommended. Everything here except madmom installs
-# cleanly on 3.13/3.14 as well, but madmom has no wheels beyond 3.12 and does
-# not build from source against NumPy 2.x. Without it the app still runs:
+# cleanly on 3.13/3.14 as well, but madmom has no wheels and does not build
+# from source beyond 3.12. Without it the app still runs:
 # beat tracking falls back to librosa and chord fusion uses two engines
 # instead of three. See README.md.
 
