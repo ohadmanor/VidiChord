@@ -206,8 +206,22 @@ signed, and answering the challenge means running the player's own JavaScript
 in a real engine — yt-dlp no longer has an interpreter of its own. It enables
 only Deno by default, so VidiChord names every engine yt-dlp supports and uses
 whichever it finds; Node is the one most machines already have. The
-`yt-dlp-ejs` package in `requirements.txt` supplies the script Node needs,
-which yt-dlp itself ships only for Deno and Bun.
+`yt-dlp-ejs` package, which `requirements.txt` pulls in through
+`yt-dlp[default]`, supplies the script Node needs, which yt-dlp itself ships
+only for Deno and Bun.
+
+yt-dlp is also the one dependency that goes stale on its own. YouTube retires
+the player clients it impersonates every few weeks, and a stale copy is refused
+with a bare `403 Forbidden` the moment a download starts — the video's details
+still load, and no cookie helps. VidiChord keeps its copy current rather than
+asking you to. Every time it starts, it asks PyPI in the background whether a
+newer release is out and upgrades the venv if so — before any song has loaded
+yt-dlp, so the first song simply uses the new one. It asks again once a day as
+a download starts, for an app left running, and when YouTube refuses a request
+that way regardless it upgrades on the spot and asks again. None of this needs
+a restart. (The `[default]` extra pins the `yt-dlp-ejs` release each yt-dlp
+expects, so the pair cannot drift.) Set `VIDICHORD_NO_YTDLP_UPDATE=1` to keep
+the yt-dlp you have.
 
 ### Configuration
 
@@ -253,12 +267,13 @@ A second, separate limit is per-network rather than per-request: fetch a lot in
 a short time, or share an office connection, and YouTube answers `429 Too Many
 Requests` for a while. No cookie fixes that one — only waiting does.
 
-A third refusal looks alarming and means nothing: a bare `403 Forbidden` on the
-media itself, which Google's servers hand out to a large share of perfectly
-ordinary requests — measured at roughly half of them on one video, with the
-next attempt on a freshly signed URL succeeding. yt-dlp treats a 403 as final
-and stops, so stage 1 asks again up to eight times before believing it. This is
-why a download sometimes pauses and reports that it is retrying.
+A third refusal is the one that used to need you: a bare `403 Forbidden` on the
+media itself, with none of the sign-in wording. That is YouTube withdrawing
+service from the player client yt-dlp impersonates — the video's details still
+load, no retry clears it and no cookie helps; only a newer yt-dlp does. Stage 1
+installs one on the spot and asks again, and says so in its progress. If it was
+already the newest release, yt-dlp has not caught up with YouTube yet; that
+usually takes a few days.
 
 Local audio files are unaffected. "Add from file" needs none of this, and is
 the reliable path when YouTube is being difficult.
@@ -283,6 +298,7 @@ Environment variables:
 | `VIDICHORD_DEMUCS_THREADS` | Torch CPU threads (default: all cores minus one) |
 | `VIDICHORD_COOKIES` | Path to a `cookies.txt` for YouTube requests |
 | `VIDICHORD_COOKIES_BROWSER` | Read YouTube cookies from this browser, e.g. `firefox` |
+| `VIDICHORD_NO_YTDLP_UPDATE` | Set to `1` to stop VidiChord updating yt-dlp itself — at start-up, daily, and when YouTube refuses a download |
 | `VIDICHORD_NO_BROWSER=1` | Do not open a browser on start |
 | `VIDICHORD_PORT` | Serve on another port when 8001 is taken (default `8001`) |
 
@@ -337,6 +353,16 @@ unscrambling them means running the player's own code, so a machine with no
 Node.js (or Deno, Bun or QuickJS) can open local audio files but not download
 from YouTube. Installing Node.js is the usual answer; dropping `node.exe` beside
 `VidiChord.exe` also works, since that folder is searched.
+
+The exe keeps yt-dlp current too, the same way — at start-up, daily, and when
+YouTube refuses — even though its own copy is frozen into the bundle. It has no
+pip, so it downloads the release's wheels from PyPI, checks them against the
+checksums PyPI publishes, and unpacks them into a `VidiChord_yt-dlp` folder beside the
+exe, which it then loads in place of the bundled copy. The bundled copy stays
+as the fallback: a download that will not load is set aside (renamed
+`<version>.broken`) and never fetched again. Deleting that folder goes
+back to the bundled copy. `build_release.bat` bundles the newest yt-dlp there
+is, so a fresh build starts with nothing to download.
 
 Settings and the song library are written next to the exe, not into the
 extraction directory that would take them with it when the app exits — so keep

@@ -7,7 +7,7 @@ a cookie jar may come from and the guidance the app gives when there is none.
 import pytest
 
 from vidichord.config import Settings
-from vidichord.pipeline import stage1_audio
+from vidichord.pipeline import stage1_audio, ytdlp_update
 
 
 @pytest.fixture()
@@ -193,12 +193,16 @@ def test_a_bare_403_is_not_retried(refusal):
         "HTTP Error 403: Forbidden",
     ],
 )
-def test_a_bare_403_is_blamed_on_a_stale_yt_dlp(refusal):
-    """The one refusal the user cannot fix from inside the app."""
+def test_a_bare_403_is_blamed_on_a_stale_yt_dlp(refusal, monkeypatch):
+    """The refusal the download fixes itself. Met anywhere else, it says so.
+
+    The upgrade-and-retry itself is covered in test_ytdlp_update.py.
+    """
+    monkeypatch.setattr(stage1_audio, "FROZEN", False)
     message = stage1_audio.explain_failure(RuntimeError(refusal))
 
     assert message.startswith(stage1_audio.STALE_YTDLP)
-    assert "pip install -U yt-dlp yt-dlp-ejs" in message
+    assert ytdlp_update.MANUAL_COMMAND in message
     # The sign-in advice is wrong here: no cookie makes a retired client work.
     assert not message.startswith(stage1_audio.HEADLINE)
 

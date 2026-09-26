@@ -12,21 +12,25 @@ uvicorn>=0.27
 pydantic>=2.6
 
 # --- audio acquisition ---
-# The floor is the release that introduced the JavaScript-runtime interface
-# this app configures. Keep yt-dlp current regardless: YouTube changes often,
-# and a stale copy stops downloading long before it stops importing.
-yt-dlp>=2026.7.4
-requests>=2.31
-# Descrambling a YouTube streaming URL means running the player's JavaScript,
-# and yt-dlp ships the script that does it only for Deno and Bun. Node - the
-# engine most machines actually have - needs this package, and without it the
-# challenge goes unanswered and downloads are refused.
+# yt-dlp goes stale faster than anything else here: YouTube retires the player
+# clients it impersonates every few weeks, and a stale copy is refused with a
+# bare 403 the moment a download starts. The app keeps its own copy current -
+# vidichord/pipeline/ytdlp_update.py upgrades it at every start and once a day
+# when PyPI has a newer release, and again on the spot when YouTube refuses -
+# so this floor only has to be new enough to get the first song through.
 #
-# Upgrade it in step with yt-dlp. yt-dlp checks the script's version and hash
-# against its own vendored manifest and silently ignores a mismatch, which
-# looks exactly like not having the package at all. The release build asserts
-# the two agree; `pip install -U yt-dlp yt-dlp-ejs` keeps them that way.
-yt-dlp-ejs>=0.8
+# The "default" extra matters. Descrambling a YouTube streaming URL means
+# running the player's JavaScript, and yt-dlp ships the script that does it
+# only for Deno and Bun; Node - the engine most machines actually have - needs
+# the yt-dlp-ejs package. yt-dlp checks that script's version and hash against
+# its own vendored manifest and silently ignores a mismatch, which looks
+# exactly like not having the package at all. The extra pins the exact
+# yt-dlp-ejs release each yt-dlp expects, so installing the pair this way
+# keeps them matched by construction; the release build asserts it anyway.
+# (The extra also brings brotli, mutagen, pycryptodomex and websockets, which
+# yt-dlp uses when present - all small, all with Windows wheels.)
+yt-dlp[default]>=2026.8.19
+requests>=2.31
 
 # --- transcription ---
 # 1.1 is the floor that knows the "large-v3-turbo" model alias.

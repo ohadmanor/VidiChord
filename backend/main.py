@@ -70,6 +70,14 @@ def main() -> None:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     _configure_path()
 
+    # YouTube breaks yt-dlp every few weeks, and a newer yt-dlp is usually
+    # out by then. Look for one now, before anything imports it, in the
+    # background so the app opens at once. The packaged app does this too,
+    # into a folder beside the exe.
+    from vidichord.pipeline import ytdlp_update
+
+    ytdlp_update.check_in_background()
+
     import uvicorn
 
     from vidichord.config import PORT

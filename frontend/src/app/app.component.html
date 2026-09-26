@@ -23,7 +23,7 @@
           <option value="en">English</option>
           <option value="he">Hebrew</option>
         </select>
-        <button class="btn btn-primary" (click)="startFromYoutube()" [disabled]="!youtubeUrl.trim() || isRunning">
+        <button class="btn btn-primary" (click)="startFromYoutube()" [disabled]="!youtubeUrl.trim() || isRunning || starting">
           Extract &amp; Align
         </button>
       </div>
@@ -217,8 +217,17 @@
       <div class="progress-percent">{{ progressPercent.toFixed(0) }}%</div>
     </div>
 
+    <!-- Adding a song: no job yet, the server is reading the video's details -->
+    <div class="glass-panel centred" *ngIf="starting && !isRunning">
+      <div class="progress-title">
+        <svg lucideRefreshCw class="animate-spin"></svg>
+        Reading video details&hellip;
+      </div>
+      <div class="progress-message">Just after start-up this can take a little longer, while yt-dlp updates.</div>
+    </div>
+
     <!-- ======================= Empty state ======================= -->
-    <div class="glass-panel centred" *ngIf="!songId && !isRunning && !showChoiceModal && !showLibrary">
+    <div class="glass-panel centred" *ngIf="!songId && !isRunning && !starting && !showChoiceModal && !showLibrary">
       <h2>Load a song</h2>
       <p class="muted">Paste a YouTube link in the toolbar above, or open the library.</p>
     </div>

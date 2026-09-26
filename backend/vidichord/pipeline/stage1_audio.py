@@ -17,13 +17,14 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+from typing import NoReturn
 
 import requests
 
-from ..config import DATA_DIR, FFMPEG_DIR, Settings
+from ..config import DATA_DIR, FFMPEG_DIR, FROZEN, Settings
 from ..models import SourceDoc
 from ..project import SongProject, make_song_id
-from . import StageContext
+from . import StageContext, ytdlp_update
 
 _FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
@@ -211,8 +212,11 @@ _TRANSIENT_SIGNS = (
     "http error 504",
 )
 
-#: A refusal of the media itself, as opposed to of the video's details.
-_MEDIA_REFUSAL_SIGNS = ("403", "forbidden")
+#: A refusal of the media itself, as yt-dlp words it. Not the bare number: a
+#: song folder is named after the song, and an error quoting its path - a
+#: .part file held open, ffmpeg's last line - would make "Forbidden Fruit" a
+#: refusal.
+_MEDIA_REFUSAL_SIGNS = ("http error 403",)
 
 
 def _is_transient(error: Exception) -> bool:
@@ -235,19 +239,59 @@ HEADLINE = "You need to log in to YouTube."
 #: details and still hands out streaming URLs - the refusal arrives only when
 #: the download starts. So the song looks fine right up to the moment it
 #: fails, no retry clears it, and no cookie helps. Only a yt-dlp new enough to
-#: ask as a client YouTube still serves.
+#: ask as a client YouTube still serves - which :func:`download` fetches on
+#: the spot (see :mod:`ytdlp_update`), so this text is followed by how that
+#: went rather than by a command for the user to run.
 STALE_YTDLP = (
     "YouTube would not send this song's audio.\n\n"
-    "This usually means VidiChord's copy of yt-dlp has been overtaken by a "
-    "change at YouTube's end: it asks for the audio as a player YouTube no "
-    "longer serves, and the refusal only arrives once the download starts - "
-    "which is why the video's details loaded normally.\n\n"
-    "Running from source, this fixes it:\n\n"
-    "    backend\\.venv\\Scripts\\pip install -U yt-dlp yt-dlp-ejs\n\n"
-    "and then restart VidiChord. In the packaged app a newer build is needed, "
-    "because the exe carries its own copy and cannot update it.\n\n"
-    "\"Add from file\" needs none of this, if you already have the audio."
+    "This usually means yt-dlp, which VidiChord downloads with, has been "
+    "overtaken by a change at YouTube's end: it asks for the audio as a "
+    "player YouTube no longer serves. The refusal usually arrives only once "
+    "the download starts, which is why a video's details can load normally."
 )
+
+#: The paragraph after it, one per outcome of the update.
+UPDATED_STILL_REFUSED = (
+    "VidiChord updated yt-dlp to {version} and YouTube still refused, so this "
+    "is a change yt-dlp has not caught up with yet. That usually takes it a "
+    "few days; try the song again then."
+)
+ALREADY_NEWEST = (
+    "VidiChord's yt-dlp is already the newest release ({version}), so this is "
+    "a change yt-dlp has not caught up with yet. That usually takes it a few "
+    "days; try the song again then."
+)
+UPDATE_FAILED = "VidiChord tried to update yt-dlp and could not: {reason}\n\n{manual}"
+
+#: What the user can do instead, when the app could not update - which
+#: differs, because only a source checkout has a pip to hand them.
+MANUAL_FROM_SOURCE = (
+    "Running from source, this does the same by hand:\n\n"
+    f"    {ytdlp_update.MANUAL_COMMAND}\n\n"
+    "and then try the song again."
+)
+MANUAL_PACKAGED = (
+    "It tries again every time VidiChord starts, and whenever a download is "
+    "refused like this. A newer VidiChord build also brings a newer yt-dlp."
+)
+#: When the user turned updating off, nothing was tried - and a yt-dlp
+#: installed by hand then needs a restart, because only an update the app
+#: makes itself swaps the running copy.
+UPDATES_OFF = (
+    "VidiChord did not update yt-dlp, because updating is turned off "
+    f"({ytdlp_update.DISABLE_ENV} is set). Unset it and restart VidiChord to "
+    "let it update."
+)
+UPDATES_OFF_FROM_SOURCE = (
+    f"{UPDATES_OFF} Or update by hand:\n\n"
+    f"    {ytdlp_update.MANUAL_COMMAND}\n\n"
+    "and then restart VidiChord."
+)
+FROM_FILE = "\"Add from file\" needs none of this, if you already have the audio."
+
+
+def _manual_update() -> str:
+    return MANUAL_PACKAGED if FROZEN else MANUAL_FROM_SOURCE
 
 #: Signatures of a refusal that more retries will not fix.
 _BLOCKED_SIGNS = (
@@ -272,13 +316,31 @@ _COOKIE_READ_SIGNS = (
 )
 
 
+def _is_stale_refusal(error: Exception, context: str = "") -> bool:
+    """True if ``error`` is the refusal a newer yt-dlp fixes.
+
+    That is a 403 on the media with none of the wording that points at the
+    user instead - a sign-in demand, a rate limit, a browser whose cookies
+    could not be read.
+    """
+    lowered = f"{error} {context}".lower()
+    if any(sign in lowered for sign in _COOKIE_READ_SIGNS + _BLOCKED_SIGNS):
+        return False
+    return any(sign in lowered for sign in _MEDIA_REFUSAL_SIGNS)
+
+
 def explain_failure(
-    error: Exception, settings: Settings | None = None, context: str = ""
+    error: Exception,
+    settings: Settings | None = None,
+    context: str = "",
+    outcome: str | None = None,
 ) -> str:
     """Turn a yt-dlp refusal into something a user can act on.
 
     ``context`` carries yt-dlp's own messages when they were captured rather
-    than printed, so a refusal is recognised by them too.
+    than printed, so a refusal is recognised by them too. ``outcome`` is how
+    the attempt to update yt-dlp went, for the refusal that calls for one;
+    without it the user is handed the update to make.
     """
     raw = str(error)
     lowered = f"{raw} {context}".lower()
@@ -298,11 +360,13 @@ def explain_failure(
 
     if not any(sign in lowered for sign in _BLOCKED_SIGNS):
         # A 403 on the media, with none of the sign-in or rate-limit wording
-        # around it, is the one refusal the user cannot fix from inside the
-        # app - and the rawest-looking of them all, so it is the one most
-        # worth translating.
-        if any(sign in lowered for sign in _MEDIA_REFUSAL_SIGNS):
-            return f"{STALE_YTDLP}\n\nOriginal error: {raw}"
+        # around it, is the one refusal a cookie does nothing for - and the
+        # rawest-looking of them all, so it is the one most worth translating.
+        if _is_stale_refusal(error, context):
+            if outcome is None:
+                outcome = _manual_update()
+            original = f"Original error: {raw}"
+            return "\n\n".join([STALE_YTDLP, outcome, FROM_FILE, original])
         return raw
 
     if cookie_options(settings):
@@ -361,8 +425,6 @@ class _QuietLogger:
 
 def probe(url: str, settings: Settings | None = None) -> dict:
     """Fetch video metadata without downloading the media."""
-    import yt_dlp
-
     logger = _QuietLogger()
     options = {
         "noplaylist": True,
@@ -372,15 +434,72 @@ def probe(url: str, settings: Settings | None = None) -> dict:
     }
     options.update(js_runtime_options())
     options.update(cookie_options(settings))
-    try:
-        with yt_dlp.YoutubeDL(options) as ydl:
+
+    def attempt() -> dict:
+        # A retry is judged by its own messages, not the first attempt's.
+        logger.errors.clear()
+        with ytdlp_update.load().YoutubeDL(options) as ydl:
             return ydl.extract_info(url, download=False)
+
+    return _ask_youtube(attempt, None, settings, lambda: " ".join(logger.errors))
+
+
+def _fail(message: str, error: Exception) -> NoReturn:
+    """Raise ``message`` as the stage's failure, and print it too.
+
+    The exe runs with a console, and that is where a user watching a run
+    looks first. Say the same thing there as in the app.
+    """
+    print(f"\n{message}\n", file=sys.stderr)
+    raise RuntimeError(message) from error
+
+
+def _ask_youtube(attempt, report, settings: Settings | None, context=lambda: ""):
+    """Run ``attempt``, one request to YouTube, updating yt-dlp if that is refused.
+
+    ``attempt`` returns what the request produced and raises yt-dlp's own
+    error otherwise. A refusal of the kind a newer yt-dlp fixes is answered
+    by installing one and running ``attempt`` once more; every other failure,
+    and that one when nothing more can be done, is raised as a RuntimeError
+    carrying the explanation. ``context`` supplies yt-dlp's captured messages,
+    for recognising a refusal the exception itself is vague about.
+    """
+    # Which copy the refusal, if any, was of. Another download may replace it
+    # while this one runs, and then the retry is on that copy, not on a pip
+    # run of our own - see ``upgrade``.
+    ran_on = ytdlp_update.installed()
+    try:
+        return attempt()
     except Exception as error:
-        message = explain_failure(error, settings, " ".join(logger.errors))
-        # The exe runs with a console, and that is where a user watching a run
-        # looks first. Say the same thing there as in the app.
-        print(f"\n{message}\n", file=sys.stderr)
-        raise RuntimeError(message) from error
+        if not _is_stale_refusal(error, context()):
+            _fail(explain_failure(error, settings, context()), error)
+
+        # The refusal a newer yt-dlp fixes. Fetch one and ask again, and say
+        # how that went either way: the user used to be handed a pip command
+        # at this point, and the point of running it here is that they are
+        # not any more. The packaged app does the same, into a folder beside
+        # the exe (see ytdlp_update).
+        if ytdlp_update.disabled():
+            outcome = UPDATES_OFF if FROZEN else UPDATES_OFF_FROM_SOURCE
+            _fail(explain_failure(error, settings, context(), outcome), error)
+        try:
+            version = ytdlp_update.upgrade(report, stale=ran_on)
+        except RuntimeError as reason:
+            outcome = UPDATE_FAILED.format(reason=reason, manual=_manual_update())
+            _fail(explain_failure(error, settings, context(), outcome), error)
+        if version is None:
+            outcome = ALREADY_NEWEST.format(version=ran_on)
+            _fail(explain_failure(error, settings, context(), outcome), error)
+
+        if report:
+            report(f"Updated yt-dlp to {version}, asking YouTube again...", None)
+        try:
+            return attempt()
+        except Exception as again:
+            outcome = None
+            if _is_stale_refusal(again, context()):
+                outcome = UPDATED_STILL_REFUSED.format(version=version)
+            _fail(explain_failure(again, settings, context(), outcome), again)
 
 
 class _ProgressLogger:
@@ -420,8 +539,6 @@ def download(
     url: str, destination: Path, report=None, settings: Settings | None = None
 ) -> None:
     """Download the best audio stream and write it to ``destination`` as WAV."""
-    import yt_dlp
-
     ffmpeg_dir = ensure_ffmpeg(report)
     # yt-dlp appends the container extension to outtmpl, so hand it a stem.
     stem = destination.with_suffix("")
@@ -440,11 +557,25 @@ def download(
     options.update(cookie_options(settings))
     options["logger"] = _ProgressLogger(report) if report else _QuietLogger()
 
+    _ask_youtube(lambda: _fetch(url, options, report), report, settings)
+
+    if not destination.is_file():
+        raise RuntimeError(f"Expected {destination.name} to exist after download")
+
+
+def _fetch(url: str, options: dict, report=None) -> None:
+    """One download, given a few more attempts if the connection falters.
+
+    Raises yt-dlp's own error once it gives up.
+    """
+    yt_dlp = ytdlp_update.load()
+
     for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
                 if ydl.download([url]) != 0:
                     raise RuntimeError("Download or conversion failed")
+            return
         except Exception as error:
             # Each attempt re-extracts, because the refusal is attached to the
             # streaming URL rather than to the video: reusing it would fail the
@@ -458,14 +589,7 @@ def download(
                     )
                 time.sleep(_RETRY_PAUSE)
                 continue
-            message = explain_failure(error, settings)
-            print(f"\n{message}\n", file=sys.stderr)
-            raise RuntimeError(message) from error
-        else:
-            break
-
-    if not destination.is_file():
-        raise RuntimeError(f"Expected {destination.name} to exist after download")
+            raise
 
 
 def prepare_from_youtube(url: str, settings: Settings, report=None) -> SongProject:
@@ -544,6 +668,10 @@ def run(context: StageContext) -> None:
         context.report(f"Copying {Path(source.url).name}...", 0.0)
         shutil.copyfile(source.url, project.audio_path)
     else:
+        # Every few weeks YouTube changes something that only a newer yt-dlp
+        # can follow. Asking PyPI once a day, here where the progress is
+        # visible, is cheaper than finding out from the refusal.
+        ytdlp_update.ensure_current(context.report)
         download(source.url, project.audio_path, context.report, context.settings)
 
     context.report("Audio ready.", 100.0)

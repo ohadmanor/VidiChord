@@ -25,6 +25,7 @@ from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
     collect_submodules,
+    copy_metadata,
 )
 
 BACKEND_DIR = Path(SPECPATH).resolve()
@@ -160,6 +161,11 @@ for package in ("librosa", "faster_whisper", "_soundfile_data", "yt_dlp", "yt_dl
     except Exception as error:  # a missing optional package must not stop the build
         print(f"*** Note: no data files collected for {package}: {error}")
 
+# The exe updates yt-dlp itself, into a folder beside it, and has to know which
+# release it was built with to tell whether a download is newer. The package
+# metadata says, once it is bundled: importlib.metadata then finds it.
+datas += copy_metadata("yt-dlp")
+
 # That loop cannot report the failure that matters: collect_data_files returns
 # an empty list for a package that is not installed rather than raising, so a
 # venv predating yt-dlp-ejs would build a green exe that refuses every YouTube
@@ -186,7 +192,7 @@ if yt_dlp_ejs.version.split(".")[:2] != _yt_dlp_vendor.VERSION.split(".")[:2]:
         f"*** yt-dlp-ejs {yt_dlp_ejs.version} does not match the {_yt_dlp_vendor.VERSION}\n"
         "*** that this yt-dlp expects, so its solver script would be rejected at\n"
         "*** run time and YouTube downloads would fail. Reinstall the pair together:\n"
-        "***   .venv\\Scripts\\pip install -U yt-dlp yt-dlp-ejs"
+        "***   .venv\\Scripts\\pip install -U \"yt-dlp[default]\""
     )
 
 # collect_data_files yields (source file, destination *directory*), so the

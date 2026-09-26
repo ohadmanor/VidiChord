@@ -127,9 +127,17 @@ class JobManager:
 
         ``build_context`` receives the progress reporter and returns the
         :class:`StageContext` the stages should run with.
+
+        A song already being worked on gets its current job back rather than
+        a second one: two runs over one folder would download into the same
+        file and overwrite each other's artifacts. A double click does this -
+        more easily when adding a song waits on a yt-dlp update.
         """
         job = Job(job_id=uuid.uuid4().hex, song_id=song_id, stages=tuple(stages))
         with self._condition:
+            for existing in self._jobs.values():
+                if existing.song_id == song_id and not existing.finished:
+                    return existing
             self._jobs[job.job_id] = job
             self._prune()
 

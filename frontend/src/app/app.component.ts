@@ -140,6 +140,12 @@ export class AppComponent implements OnInit, OnDestroy {
   error = '';
   success = '';
   busy = false;
+  /**
+   * Set while the request that adds a song is in flight - before there is a
+   * job to show. It reads the video's details first, and just after start-up
+   * it may also wait for yt-dlp to finish updating, so it can take a while.
+   */
+  starting = false;
 
   // --- library -------------------------------------------------------------
   library: SongSummary[] = [];
@@ -319,13 +325,14 @@ export class AppComponent implements OnInit, OnDestroy {
 
   async startFromYoutube(): Promise<void> {
     const url = this.youtubeUrl.trim();
-    if (!url || this.isRunning) return;
+    if (!url || this.isRunning || this.starting) return;
 
     this.error = '';
     this.success = '';
     this.resetSong();
     this.persistTuning();
 
+    this.starting = true;
     try {
       const created = await this.api.createFromYoutube(url, {
         language: this.selectedLanguage === 'auto' ? null : this.selectedLanguage,
@@ -337,6 +344,8 @@ export class AppComponent implements OnInit, OnDestroy {
       this.watch(created.job);
     } catch (err) {
       this.error = this.describe(err);
+    } finally {
+      this.starting = false;
     }
   }
 

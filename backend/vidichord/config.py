@@ -39,8 +39,8 @@ _BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", BACKEND_DIR))
 # forgotten and the song library would vanish between launches. Beside the
 # executable it persists, and the app stays portable - copy the exe and its
 # folder anywhere and the library follows.
-_FROZEN = bool(getattr(sys, "frozen", False))
-DATA_DIR = Path(sys.executable).resolve().parent if _FROZEN else BACKEND_DIR
+FROZEN = bool(getattr(sys, "frozen", False))
+DATA_DIR = Path(sys.executable).resolve().parent if FROZEN else BACKEND_DIR
 
 CONFIG_PATH = DATA_DIR / "config.json"
 
@@ -55,14 +55,14 @@ _FRONTEND_CANDIDATES = (
     REPO_DIR / "frontend" / "dist" / "frontend" / "browser",
 )
 
-DEFAULT_LIBRARY_DIR = (DATA_DIR if _FROZEN else REPO_DIR) / "VidiChord_Files"
+DEFAULT_LIBRARY_DIR = (DATA_DIR if FROZEN else REPO_DIR) / "VidiChord_Files"
 
 # Whether spawning helper processes is affordable. In a onefile build every
 # spawned worker re-runs the executable, and the bootloader re-extracts the
 # whole bundle to a fresh temp directory per process - so what saves minutes
 # in a normal install costs more than it saves there. Onefile extraction dirs
 # are named "_MEIxxxx"; a onedir bundle lives in "_internal" beside the exe.
-PROCESS_POOLS_OK = not (_FROZEN and _BUNDLE_ROOT.name.startswith("_MEI"))
+PROCESS_POOLS_OK = not (FROZEN and _BUNDLE_ROOT.name.startswith("_MEI"))
 
 
 def int_env(name: str, default: int, minimum: int = 1) -> int:

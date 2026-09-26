@@ -422,6 +422,14 @@ if errorlevel 1 (
     goto :eof
 )
 
+REM The exe carries whatever yt-dlp is installed on build day. It updates
+REM itself from PyPI as YouTube changes, into VidiChord_yt-dlp beside it, but
+REM the bundled copy is what it falls back on - so every release ships the
+REM newest one there is.
+echo Updating yt-dlp to the newest release, for the bundle.
+"%PY%" -m pip install --disable-pip-version-check --quiet --upgrade "yt-dlp[default]"
+if errorlevel 1 echo Could not update yt-dlp. The release will carry the version already installed.
+
 REM madmom is optional and awkward. All three of its quirks are handled here:
 REM  1. Its setup.py imports Cython without declaring it, so pip's isolated
 REM     build environment cannot see it - hence --no-build-isolation, which in
