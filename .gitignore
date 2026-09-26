@@ -30,3 +30,4 @@ backend/test_run.py
 backend/config.json
 songs/
 *.pdf
+*.wav
