@@ -189,6 +189,8 @@
 
 .alert span {
   flex: 1;
+  /* An export message carries a whole folder path; let it break anywhere. */
+  overflow-wrap: anywhere;
 }
 
 .alert-success {

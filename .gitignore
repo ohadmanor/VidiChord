@@ -31,3 +31,5 @@ backend/config.json
 songs/
 *.pdf
 *.wav
+# Default "Export to songbook" folder when run from source (config.DEFAULT_SHEETS_DIR).
+VidiChord_Songbook/

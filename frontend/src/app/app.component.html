@@ -100,7 +100,7 @@
       <button class="icon-btn" (click)="showLibrary = !showLibrary; refreshLibrary()" title="Library">
         <svg lucideMusic></svg>
       </button>
-      <button class="icon-btn" (click)="showSettingsModal = true" title="Settings">
+      <button class="icon-btn" (click)="openSettings()" title="Settings">
         <svg lucideSettings></svg>
       </button>
     </div>
@@ -112,7 +112,10 @@
     <span>{{ error }}</span>
     <button class="icon-btn" (click)="error = ''"><svg lucideX></svg></button>
   </div>
-  <div class="alert alert-success" *ngIf="success">{{ success }}</div>
+  <div class="alert alert-success" *ngIf="success">
+    <span>{{ success }}</span>
+    <button class="icon-btn" (click)="dismissSuccess()" title="Close"><svg lucideX></svg></button>
+  </div>
 
   <main class="main-content">
     <!-- ======================= Library ======================= -->
@@ -385,8 +388,11 @@
 
         <label class="field">
           <span>Songbook sheets directory</span>
-          <input type="text" [(ngModel)]="config.sheets_dir" />
-          <small class="muted">Where "Export to songbook" writes its JSON files.</small>
+          <input type="text" [(ngModel)]="config.sheets_dir" [placeholder]="config.sheets_dir_default || ''" />
+          <small class="muted">
+            Where "Export to songbook" writes its JSON files - import one in songbook with
+            Add song, then Import JSON. Leave it empty to use the folder shown.
+          </small>
         </label>
 
         <label class="field">
@@ -422,9 +428,9 @@
           <small class="muted">
             Splits each song into vocals, drums, bass and the rest, which the player
             turns into faders and stage 2 transcribes instead of the full mix. It adds
-            a couple of minutes per song and needs Demucs installed
-            (<code>backend\.venv\Scripts\pip install demucs</code>); without it songs
-            import exactly as before. The box on the right names the model.
+            about three-quarters of the song's length on a computer without a graphics
+            card. Turned off, songs import from the full mix instead. The box on the
+            right names the model.
           </small>
         </label>
 
@@ -498,7 +504,7 @@
         <span class="muted">{{ settingsMessage }}</span>
         <span class="spacer"></span>
         <button class="btn btn-secondary" (click)="showSettingsModal = false">Cancel</button>
-        <button class="btn btn-primary" (click)="saveSettings()">Save</button>
+        <button class="btn btn-primary" (click)="saveSettings()" [disabled]="!configLoaded">Save</button>
       </div>
     </div>
   </div>

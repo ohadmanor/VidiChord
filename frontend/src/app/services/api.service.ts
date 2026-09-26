@@ -49,10 +49,18 @@ export class ApiService {
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
-      ...init,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+        ...init,
+      });
+    } catch {
+      // The browser's own words for this are "Failed to fetch".
+      throw new Error(
+        "Can't reach VidiChord - it may have been closed. Start it again, then try once more."
+      );
+    }
 
     if (!response.ok) {
       throw new Error(await this.describeError(response));
@@ -75,6 +83,14 @@ export class ApiService {
       }
     } catch {
       // Fall through to the status text.
+    }
+    // A server error with no explanation of its own: the status line alone
+    // tells the user nothing they can act on.
+    if (response.status >= 500) {
+      return (
+        `VidiChord hit an unexpected error (${response.status} ${response.statusText}). ` +
+        'Its console window shows the details.'
+      );
     }
     return `${response.status} ${response.statusText}`;
   }
@@ -332,7 +348,7 @@ export class ApiService {
     return `${this.baseUrl}/api/songs/${encodeURIComponent(songId)}/stems/${name}`;
   }
 
-  exportToSongbook(songId: string): Promise<{ filename: string; path: string }> {
+  exportToSongbook(songId: string): Promise<{ filename: string; path: string; folder?: string }> {
     return this.request(`/api/songs/${encodeURIComponent(songId)}/export`, {
       method: 'POST',
     });

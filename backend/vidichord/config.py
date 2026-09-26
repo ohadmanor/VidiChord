@@ -57,6 +57,34 @@ _FRONTEND_CANDIDATES = (
 
 DEFAULT_LIBRARY_DIR = (DATA_DIR if FROZEN else REPO_DIR) / "VidiChord_Files"
 
+# Where "Export to songbook" writes when no folder has been chosen: beside the
+# library, where a user looks for what the app made. Export used to refuse
+# until a folder was set, which on a fresh install meant always.
+DEFAULT_SHEETS_DIR = (DATA_DIR if FROZEN else REPO_DIR) / "VidiChord_Songbook"
+
+
+def clean_path(value: str | os.PathLike[str] | None) -> Path | None:
+    """A folder or file path as typed into Settings, made usable. None if empty.
+
+    Explorer's "Copy as path" wraps a path in quotes, and a paste often brings
+    a space along; either stored as it is names a folder that does not exist.
+    A relative path is taken relative to the app's own folder rather than to
+    wherever the process happened to be started from.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    while len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    if not text:
+        return None
+    path = Path(os.path.expandvars(os.path.expanduser(text)))
+    if path.drive and not path.root:
+        # "C:" or "C:Songs" is relative to the current folder *on that drive*
+        # - not what anyone means. Read it from the drive's root instead.
+        path = Path(path.drive + "\\") / str(path)[len(path.drive):]
+    return path if path.is_absolute() else DATA_DIR / path
+
 # Whether spawning helper processes is affordable. In a onefile build every
 # spawned worker re-runs the executable, and the bootloader re-extracts the
 # whole bundle to a fresh temp directory per process - so what saves minutes
@@ -112,12 +140,16 @@ class Settings:
                  stems_enabled: bool = True,
                  stems_model: str = "",
                  path: Path | None = None) -> None:
-        self.library_dir = Path(library_dir) if library_dir else DEFAULT_LIBRARY_DIR
-        # Empty means "not configured"; export refuses to run until it is set.
-        self.sheets_dir = Path(sheets_dir) if sheets_dir else None
+        self.library_dir = clean_path(library_dir) or DEFAULT_LIBRARY_DIR
+        #: The folder chosen for songbook exports; None when none was, and
+        #: :attr:`sheets_folder` - the one actually written to - is then the
+        #: default. Kept apart so the default is never written into the
+        #: config: moving the exe's folder would leave it pointing at the old
+        #: place.
+        self.sheets_dir = clean_path(sheets_dir)
         #: A Netscape-format cookie jar, so YouTube requests are made as a
         #: signed-in user. See :mod:`vidichord.pipeline.stage1_audio`.
-        self.cookies_file = Path(cookies_file) if cookies_file else None
+        self.cookies_file = clean_path(cookies_file)
         #: A browser to read those cookies from instead, e.g. "firefox" or
         #: "chrome:Profile 1". Ignored when ``cookies_file`` is set.
         self.cookies_browser = (cookies_browser or "").strip()
@@ -130,6 +162,11 @@ class Settings:
         #: Where :meth:`save` writes. Overridable so tests never touch the
         #: user's real config file.
         self.path = Path(path) if path else CONFIG_PATH
+
+    @property
+    def sheets_folder(self) -> Path:
+        """Where songbook exports go: the chosen folder, or the default."""
+        return self.sheets_dir or DEFAULT_SHEETS_DIR
 
     # -- serialisation -----------------------------------------------------
 
@@ -163,23 +200,33 @@ class Settings:
     def load(cls, path: Path | None = None) -> "Settings":
         """Read settings from disk, falling back to defaults on any problem."""
         path = Path(path) if path else CONFIG_PATH
+        settings = None
         if path.is_file():
             try:
                 with path.open("r", encoding="utf-8") as handle:
                     settings = cls.from_dict(json.load(handle), path=path)
-                settings.ensure_directories()
-                return settings
-            except (OSError, ValueError):
+            except (OSError, ValueError, AttributeError):
                 # A corrupt config should not stop the app from starting.
-                pass
-        settings = cls(path=path)
-        settings.ensure_directories()
+                settings = None
+        if settings is None:
+            settings = cls(path=path)
+        try:
+            settings.ensure_directories()
+        except OSError as error:
+            # The library is on a drive that is not there right now - an
+            # external or network one. Keep every setting as saved rather than
+            # start over from defaults, forgetting the songbook folder and the
+            # rest with it: the library comes back with its drive.
+            print(f"Library folder {settings.library_dir} is not available: {error}", file=sys.stderr)
         return settings
 
     def save(self) -> None:
+        # The library folder first: one that cannot be created is refused
+        # before the file is written, not after - which left a config on disk
+        # the next start could not use.
+        self.ensure_directories()
         with self.path.open("w", encoding="utf-8") as handle:
             json.dump(self.to_dict(), handle, indent=4)
-        self.ensure_directories()
 
     def ensure_directories(self) -> None:
         self.library_dir.mkdir(parents=True, exist_ok=True)

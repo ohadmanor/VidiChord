@@ -294,6 +294,8 @@ export interface AppConfig {
   stems_enabled: boolean;
   /** Which Demucs model to separate with; empty means the default. */
   stems_model: string;
+  /** Where exports go while `sheets_dir` is empty. Read-only. */
+  sheets_dir_default?: string;
 }
 
 // --- tuning ----------------------------------------------------------------

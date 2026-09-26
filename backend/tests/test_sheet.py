@@ -5,6 +5,8 @@ both text directions, and stretches with no singing must be written as bar
 charts rather than as chords floating over nothing.
 """
 
+import json
+
 import pytest
 
 from vidichord.models import (
@@ -346,6 +348,55 @@ class TestExport:
     def test_filenames_are_safe(self, title, artist, expected):
         assert export.safe_filename(title, artist) == expected
 
+    @pytest.mark.parametrize(
+        "title,artist,expected",
+        [
+            # Windows refuses control characters; they become one space.
+            ("Line one\nline two", "A", "Line one line two - A.json"),
+            ("Tab\there\r", "A", "Tab here - A.json"),
+            # Windows drops trailing dots and spaces, so they must not be there.
+            ("Wait...", "", "Wait.json"),
+            # Device names cannot be created at all.
+            ("CON", "", "_CON.json"),
+            ("nul.song", "", "_nul.song.json"),
+            # Invisible marks would make two same-looking names differ.
+            ("Zero​width", "A", "Zero width - A.json"),
+            # No usable title: the artist, then the song's own id - never a
+            # timestamp, which made a new file on every export.
+            ("???", "Some Artist", "Untitled - Some Artist.json"),
+            ("", "", "Untitled song.json"),
+        ],
+    )
+    def test_filenames_survive_any_title(self, title, artist, expected):
+        assert export.safe_filename(title, artist) == expected
+
+    def test_a_song_with_no_names_is_named_after_its_id(self):
+        assert export.safe_filename("", "", "Artist - Song [abc123]") == "Artist - Song [abc123].json"
+
+    @pytest.mark.parametrize("title", ["t" * 400, "🎸" * 200, "ש" * 300])
+    def test_long_names_fit_what_windows_allows(self, title):
+        """255 UTF-16 units, an emoji being two - with room left for " (99)"."""
+        name = export.safe_filename(title, "artist")
+        units = sum(2 if ord(char) > 0xFFFF else 1 for char in name)
+        assert units <= 255 - len(" (99)")
+        assert name.endswith(".json")
+        assert "\ud83c" not in name  # never half an emoji
+
+    def test_the_songbook_id_is_the_same_every_time_and_different_per_song(self):
+        assert export.songbook_id("A - B [1]") == export.songbook_id("A - B [1]")
+        assert export.songbook_id("A - B [1]") != export.songbook_id("A - B [2]")
+
+    def test_a_stray_surrogate_in_the_lyrics_does_not_break_the_file(self, tmp_path):
+        from vidichord.models import SheetDoc
+
+        sheet = SheetDoc(title="T", artist="A", blocks=[
+            LyricBlock(chord_line="C", text="broken \ud83c emoji", start=0.0, end=1.0, line_index=0)
+        ])
+        written = export.write_export(tmp_path, sheet, "A - T [1]")
+
+        payload = json.loads(written.read_text(encoding="utf-8"))
+        assert "broken" in payload["rawText"]
+
     def test_payload_shape_matches_songbook(self):
         from vidichord.models import SheetDoc
 
@@ -355,3 +406,55 @@ class TestExport:
         assert payload["isRTL"] is True
         assert payload["modifiedByUser"] is True
         assert "rawText" in payload
+
+
+class TestSongbookFile:
+    """What songbook does with the file, not only whether it is written."""
+
+    @pytest.mark.parametrize(
+        "key,expected",
+        [
+            ("A major", "A"),
+            ("E minor", "Em"),
+            ("Ab major", "G#"),   # songbook's menu has sharps only
+            ("Bb minor", "A#m"),
+            ("C# minor", "C#m"),
+            ("Eb", "D#"),
+            ("F#m", "F#m"),
+            ("unknown", ""),
+            ("", ""),
+            (None, ""),
+        ],
+    )
+    def test_the_key_is_spelled_the_way_songbook_takes_it(self, key, expected):
+        """songbook puts the key into a menu; "A major" matched no option and was lost."""
+        assert export.songbook_key(key) == expected
+
+    def test_the_first_chord_keeps_its_place_over_its_word(self):
+        """A plain strip() of the whole text moved the first chord to the start of its line."""
+        from vidichord.models import SheetDoc
+
+        sheet = SheetDoc(blocks=[
+            LyricBlock(chord_line="          G", text="Well I woke up this morning",
+                       start=0.0, end=1.0, line_index=0),
+        ])
+        assert export.render_text(sheet).splitlines()[0] == "          G"
+
+    def test_an_earlier_export_marked_hidden_is_updated(self, tmp_path):
+        """Windows refuses to open a hidden file for writing; replacing it works."""
+        import subprocess
+        import sys as _sys
+
+        from vidichord.models import SheetDoc
+
+        sheet = SheetDoc(title="T", artist="A", blocks=[
+            LyricBlock(chord_line="C", text="one", start=0.0, end=1.0, line_index=0)
+        ])
+        first = export.write_export(tmp_path, sheet, "A - T [1]")
+        if _sys.platform == "win32":
+            subprocess.run(["attrib", "+h", str(first)], check=True)
+
+        again = export.write_export(tmp_path, sheet, "A - T [1]")
+
+        assert again == first
+        assert json.loads(again.read_text(encoding="utf-8"))["title"] == "T"

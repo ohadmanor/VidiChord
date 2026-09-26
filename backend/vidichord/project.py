@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import unicodedata
 from pathlib import Path
 from typing import Iterator, TypeVar
@@ -112,14 +113,32 @@ def make_song_id(artist: str, title: str, seed: str = "") -> str:
     return f"{slug} [{digest}]"
 
 
+#: Attempts at swapping a finished file into place, and the pause between.
+_REPLACE_ATTEMPTS = 8
+_REPLACE_PAUSE = 0.05
+
+
 def _atomic_write(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` without leaving a truncated file behind."""
+    """Write ``text`` to ``path`` without leaving a truncated file behind.
+
+    On Windows a file cannot be replaced while anyone has it open, and
+    something often does for a moment - an export or a page load reading the
+    same sheet, a virus scanner. That surfaced as "access denied" and a lost
+    edit, so the swap is retried briefly before it is allowed to fail.
+    """
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
-    tmp.replace(path)
+    for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(_REPLACE_PAUSE * attempt)
 
 
 class SongProject:

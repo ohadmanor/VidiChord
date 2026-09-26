@@ -262,6 +262,14 @@ export class AppComponent implements OnInit, OnDestroy {
   dirty = false;
   syncing = false;
   isExporting = false;
+  /** Sheet edits being saved, one after another, so they land in order and
+   *  an export can wait for the last of them. */
+  private sheetSaves: Promise<void> = Promise.resolve();
+  /** Set when the last sheet edit could not be saved: the sheet on screen is
+   *  then not the sheet on disk, and an export would quietly write the old one. */
+  private sheetUnsaved = false;
+  /** Whether the settings shown are the real ones, read from the server. */
+  configLoaded = false;
 
   // --- settings ------------------------------------------------------------
   showSettingsModal = false;
@@ -311,6 +319,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.restoreTuning();
     try {
       this.config = await this.api.getConfig();
+      this.configLoaded = true;
       await this.refreshLibrary();
     } catch (err) {
       this.error = this.describe(err);
@@ -327,9 +336,18 @@ export class AppComponent implements OnInit, OnDestroy {
     return err instanceof Error ? err.message : String(err);
   }
 
-  private flash(message: string): void {
+  private flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Show a success message for `ms`. A new one replaces it, with its own full time. */
+  private flash(message: string, ms = 3500): void {
+    clearTimeout(this.flashTimer);
     this.success = message;
-    setTimeout(() => (this.success = ''), 3500);
+    this.flashTimer = setTimeout(() => (this.success = ''), ms);
+  }
+
+  dismissSuccess(): void {
+    clearTimeout(this.flashTimer);
+    this.success = '';
   }
 
   private restoreTuning(): void {
@@ -1002,19 +1020,46 @@ export class AppComponent implements OnInit, OnDestroy {
     const blocks = [...this.sheet.blocks];
     blocks[change.index] = change.block;
     this.sheet = { ...this.sheet, blocks };
-    try {
-      await this.api.putSheet(this.songId, this.sheet);
-    } catch (err) {
-      this.error = this.describe(err);
-    }
+    const songId = this.songId;
+    const sheet = this.sheet;
+    this.sheetUnsaved = true;
+    this.sheetSaves = this.sheetSaves.then(async () => {
+      try {
+        await this.api.putSheet(songId, sheet);
+        // Only the latest edit's save says the disk has caught up.
+        if (this.sheet === sheet) this.sheetUnsaved = false;
+      } catch (err) {
+        this.error = this.describe(err);
+      }
+    });
+    await this.sheetSaves;
   }
 
   async exportToSongbook(): Promise<void> {
-    if (!this.songId) return;
+    if (!this.songId || this.isExporting) return;
     this.isExporting = true;
+    this.error = '';
     try {
+      // The export is made from the sheet on disk: let the last edit land
+      // first, and if an edit could not be saved, save it now - or say so,
+      // rather than export the sheet as it was before it.
+      await this.sheetSaves;
+      if (this.sheetUnsaved && this.sheet) {
+        try {
+          await this.api.putSheet(this.songId, this.sheet);
+          this.sheetUnsaved = false;
+        } catch (err) {
+          this.error = `Your last edit to the sheet could not be saved, so it was not exported: ${this.describe(err)}`;
+          return;
+        }
+      }
       const result = await this.api.exportToSongbook(this.songId);
-      this.flash(`Exported to ${result.filename}`);
+      // Where it went, in full and for long enough to read: songbook's
+      // "Import JSON" needs the file picked from that folder.
+      this.flash(
+        result.folder ? `Exported "${result.filename}" to ${result.folder}` : `Exported to ${result.path}`,
+        10000
+      );
     } catch (err) {
       this.error = this.describe(err);
     } finally {
@@ -1024,12 +1069,32 @@ export class AppComponent implements OnInit, OnDestroy {
 
   // --- settings ------------------------------------------------------------
 
+  /** Open Settings with the settings as they are now on the server. */
+  async openSettings(): Promise<void> {
+    this.settingsMessage = '';
+    this.showSettingsModal = true;
+    try {
+      this.config = await this.api.getConfig();
+      this.configLoaded = true;
+    } catch (err) {
+      this.settingsMessage = `Could not read the current settings: ${this.describe(err)}`;
+    }
+  }
+
   async saveSettings(): Promise<void> {
+    // A form that never loaded holds blanks, and saving blanks would reset
+    // the library folder among everything else.
+    if (!this.configLoaded) {
+      this.settingsMessage = 'The current settings could not be read, so nothing was saved.';
+      return;
+    }
     this.settingsMessage = 'Saving...';
     this.persistTuning();
     try {
       this.config = await this.api.saveConfig(this.config);
       this.settingsMessage = 'Saved.';
+      // An error the new settings were saved to fix is no longer the news.
+      this.error = '';
       setTimeout(() => {
         this.showSettingsModal = false;
         this.settingsMessage = '';

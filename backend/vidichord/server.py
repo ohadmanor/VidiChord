@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from . import __version__
 from .chords.cleanup import CleanupConfig
 from .chords.fusion import FusionConfig
-from .config import PORT, Settings, frontend_dir
+from .config import DEFAULT_SHEETS_DIR, PORT, Settings, frontend_dir
 from .jobs import JobManager
 from .models import STEM_NAMES, ChordsDoc, LyricsDoc, SheetDoc, SourceDoc, StemsDoc
 # REVIEW_FINAL_STAGE is stage 3: stage 4 lays the sheet out from the lyrics and
@@ -126,7 +126,11 @@ def create_app() -> FastAPI:
         try:
             return SongProject.open(settings().library_dir, song_id)
         except KeyError:
-            raise HTTPException(status_code=404, detail=f"No such song: {song_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"No such song: {song_id}. It is not in the library any more - it may "
+                "have been deleted. Open the library to choose another.",
+            )
 
     def make_context_builder(project: SongProject, params: dict):
         def build(report):
@@ -209,6 +213,22 @@ def create_app() -> FastAPI:
         return Response(status_code=204)
 
     # -- artifacts ---------------------------------------------------------
+
+    def _sheet_is_behind(project: SongProject) -> bool:
+        """Whether the sheet was laid out before the lyrics or chords last changed.
+
+        Re-running stage 2 or 3 leaves the sheet on disk, still marked done,
+        with the words it was built from - the same test the app makes before
+        opening a song on its sheet.
+        """
+        stages = project.read_manifest().stages
+        sheet = stages.get("sheet")
+        if sheet is None or not sheet.updated_at:
+            return False
+        return any(
+            name in stages and stages[name].updated_at > sheet.updated_at
+            for name in ("lyrics", "chords")
+        )
 
     def _read_artifact(project: SongProject, model):
         document = project.read_optional(model)
@@ -460,29 +480,65 @@ def create_app() -> FastAPI:
     @app.post("/api/songs/{song_id}/export")
     def export_song(song_id: str) -> dict:
         project = open_project(song_id)
-        sheet = _read_artifact(project, SheetDoc)
-
-        target = settings().sheets_dir
-        if target is None or not target.is_dir():
+        try:
+            sheet = project.read_optional(SheetDoc)
+        except OSError as error:
+            # Held open by another program, or a disk that has gone away.
             raise HTTPException(
-                status_code=400,
-                detail="The sheets directory is not configured. Set it in Settings.",
+                status_code=409,
+                detail=f"The song sheet could not be read ({error.strerror or error}). "
+                "Close anything that has it open, then export again.",
+            )
+        if sheet is None:
+            raise HTTPException(
+                status_code=409,
+                detail="This song has no song sheet yet. Sync it first, then export.",
+            )
+        if not export.render_text(sheet).strip():
+            # Would reach songbook as a song with no words and no chords.
+            raise HTTPException(
+                status_code=409,
+                detail="This song sheet is empty, so there is nothing to export. Sync it again first.",
+            )
+        if _sheet_is_behind(project):
+            # Lyrics or chords re-run or corrected since the sheet was laid
+            # out: exporting now would send words the song no longer has.
+            raise HTTPException(
+                status_code=409,
+                detail="The song sheet is older than the latest lyrics or chords. "
+                "Sync it first, so the export has them.",
             )
 
-        import json
+        # The chosen folder, or the default beside the library: created if
+        # it is not there yet, so a fresh install exports without being set up.
+        folder = settings().sheets_folder
+        try:
+            destination = export.write_export(folder, sheet, song_id)
+        except export.ExportError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        except Exception as error:
+            # Anything else still answers in words, as JSON: a bare
+            # "Internal Server Error" tells the user nothing.
+            raise HTTPException(
+                status_code=500, detail=f"The export failed unexpectedly: {error}"
+            )
 
-        filename = export.safe_filename(sheet.title, sheet.artist)
-        destination = target / filename
-        with destination.open("w", encoding="utf-8") as handle:
-            json.dump(export.songbook_payload(sheet), handle, indent=2, ensure_ascii=False)
-
-        return {"status": "ok", "filename": filename, "path": str(destination)}
+        return {
+            "status": "ok",
+            "filename": destination.name,
+            "path": str(destination),
+            "folder": str(folder),
+        }
 
     # -- settings ----------------------------------------------------------
 
+    def config_view(current: Settings) -> dict:
+        """The settings, plus where exports go when no folder has been chosen."""
+        return {**current.to_dict(), "sheets_dir_default": str(DEFAULT_SHEETS_DIR)}
+
     @app.get("/api/config")
     def get_config() -> dict:
-        return settings().to_dict()
+        return config_view(settings())
 
     @app.put("/api/config")
     def put_config(request: SettingsRequest) -> dict:
@@ -494,9 +550,39 @@ def create_app() -> FastAPI:
         # Keep writing to wherever the current settings came from, so a test
         # or an alternate install never writes over the user's config file.
         updated = Settings.from_dict(data, path=current.path)
-        updated.save()
+        # A songbook folder that cannot be used is said so here, in Settings,
+        # rather than at the next export. One that does not exist yet is
+        # simply made - that is what anyone typing a new folder wants.
+        if updated.sheets_dir is not None:
+            if updated.sheets_dir.exists() and not updated.sheets_dir.is_dir():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The songbook folder {updated.sheets_dir} is a file, not a folder.",
+                )
+            try:
+                updated.sheets_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The songbook folder {updated.sheets_dir} could not be created: "
+                    f"{error.strerror or error}.",
+                )
+        try:
+            updated.save()
+        except OSError as error:
+            # Nothing was changed. Say which of the two it was, in words.
+            reason = error.strerror or str(error)
+            if not updated.library_dir.is_dir():
+                detail = f"The library folder {updated.library_dir} could not be created: {reason}."
+            else:
+                detail = (
+                    f"The settings could not be saved to {updated.path}: {reason}. If "
+                    "VidiChord is in a folder you cannot write to, such as Program "
+                    "Files, move it somewhere you can."
+                )
+            raise HTTPException(status_code=400, detail=detail)
         app.state.settings = updated
-        return updated.to_dict()
+        return config_view(updated)
 
     # -- the Angular app ---------------------------------------------------
 
